@@ -2362,21 +2362,50 @@
     reader.readAsDataURL(file);
   }
 
+  function populateSettingsInputs() {
+    $("settingApiKey").value = state.settings.geminiApiKey || "";
+    $("settingModel").value = state.settings.geminiModel || "gemini-4-hydrogen";
+    $("settingUseNanoBanana").checked = state.settings.useNanoBanana !== false;
+    $("settingHsName").value = state.settings.highSchoolName || "김희균";
+    $("settingElName").value = state.settings.elementaryName || "초등학생";
+    $("settingBibleMemberName").value = state.settings.bibleMemberName || "김희균";
+    $("settingBibleMemberPhone").value = state.settings.bibleMemberPhone || "01023708994";
+    $("selectFocusHabit").value = state.settings.focusHabit || "BIBLE_AND_VOLUME";
+    $("settingWebhookUrl").value = state.settings.googleAppsScriptWebhookUrl || "";
+    $("settingAutoSync").checked = Boolean(state.settings.autoSyncToDrive);
+    $("settingPdfLines").checked = Boolean(state.settings.includeHandwritingPracticeInPdf);
+  }
+
+  function applyImportedSettingsObject(rawObj) {
+    const src = (rawObj && typeof rawObj.settings === "object" && rawObj.settings) ? rawObj.settings : rawObj;
+    if (!src || typeof src !== "object") return false;
+    const allowedKeys = [
+      "geminiApiKey", "geminiModel", "useNanoBanana",
+      "highSchoolName", "elementaryName",
+      "bibleMemberName", "bibleMemberPhone",
+      "focusHabit", "googleAppsScriptWebhookUrl",
+      "autoSyncToDrive", "includeHandwritingPracticeInPdf"
+    ];
+    let changed = false;
+    for (const k of allowedKeys) {
+      if (src[k] !== undefined && src[k] !== null) {
+        state.settings[k] = typeof src[k] === "string" ? src[k].trim() : src[k];
+        changed = true;
+      }
+    }
+    if (!changed) return false;
+    saveSettings();
+    populateSettingsInputs();
+    refreshAllViews();
+    fetchBible71LogsFromDb(false);
+    return true;
+  }
+
   function bindEvents() {
     $("inputInspectDate").value = toIsoDate(new Date());
 
     // Populate settings inputs
-    $("settingApiKey").value = state.settings.geminiApiKey;
-    $("settingModel").value = state.settings.geminiModel;
-    $("settingUseNanoBanana").checked = state.settings.useNanoBanana !== false;
-    $("settingHsName").value = state.settings.highSchoolName;
-    $("settingElName").value = state.settings.elementaryName;
-    $("settingBibleMemberName").value = state.settings.bibleMemberName;
-    $("settingBibleMemberPhone").value = state.settings.bibleMemberPhone;
-    $("selectFocusHabit").value = state.settings.focusHabit || "BIBLE_AND_VOLUME";
-    $("settingWebhookUrl").value = state.settings.googleAppsScriptWebhookUrl;
-    $("settingAutoSync").checked = state.settings.autoSyncToDrive;
-    $("settingPdfLines").checked = state.settings.includeHandwritingPracticeInPdf;
+    populateSettingsInputs();
 
     $("inputInspectDate").addEventListener("change", updateBibleUiPanels);
     $("btnRefreshBibleHome").addEventListener("click", () => fetchBible71LogsFromDb(true));
@@ -2539,6 +2568,32 @@
       showToast(`${studentName()} 누적 CSV 파일을 내보냈습니다.`);
     });
 
+    $("btnImportSettingsJson").addEventListener("click", () => $("inputImportSettingsJson").click());
+    $("inputImportSettingsJson").addEventListener("change", (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const parsed = JSON.parse(String(reader.result));
+          if (applyImportedSettingsObject(parsed)) {
+            showToast("설정 JSON(API 키·옵션)을 불러와 기기에 저장했습니다!");
+          } else {
+            showToast("유효한 설정 JSON 키를 찾지 못했습니다.");
+          }
+        } catch (err) {
+          showToast(`설정 JSON 읽기 실패: ${err.message}`);
+        }
+      };
+      reader.readAsText(file);
+      e.target.value = "";
+    });
+    $("btnExportSettingsJson").addEventListener("click", () => {
+      const json = JSON.stringify(state.settings, null, 2);
+      downloadBlob(new Blob([json], { type: "application/json" }), "planner_settings.json");
+      showToast("설정 JSON 파일(planner_settings.json)을 저장했습니다.");
+    });
+
     $("inputRestoreBackupFile").addEventListener("change", (e) => {
       const file = e.target.files[0];
       if (!file) return;
@@ -2546,14 +2601,21 @@
       reader.onload = () => {
         try {
           const parsed = JSON.parse(String(reader.result));
+          let msgParts = [];
           if (Array.isArray(parsed.records)) {
             const map = new Map(state.records.map((r) => [r.id, r]));
             for (const rec of parsed.records) map.set(rec.id, rec);
             state.records = [...map.values()];
             saveRecords();
             refreshAllViews();
-            showToast(`백업 파일에서 ${parsed.records.length}건을 복원했습니다!`);
+            msgParts.push(`기록 ${parsed.records.length}건`);
           }
+          if (parsed.settings || parsed.geminiApiKey) {
+            if (applyImportedSettingsObject(parsed)) {
+              msgParts.push("설정(API 키)");
+            }
+          }
+          showToast(msgParts.length ? `백업에서 ${msgParts.join(" + ")} 복원 완료!` : "복원할 항목을 찾지 못했습니다.");
         } catch (err) {
           showToast(`복원 실패: ${err.message}`);
         }
