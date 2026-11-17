@@ -1382,11 +1382,15 @@
   }
 
   async function postInteraction(endpoint, payload, apiKey) {
+    // 브라우저 CORS 사전검사에 걸리지 않도록 표준 헤더만 사용
     const headers = { "Content-Type": "application/json", "x-goog-api-key": apiKey };
-    if (endpoint === GEMINI_BETA_ENDPOINT) headers["Api-Revision"] = "2026-05-20";
-    const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
-    const text = await res.text();
-    return { ok: res.ok, status: res.status, text };
+    try {
+      const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+      const text = await res.text();
+      return { ok: res.ok, status: res.status, text };
+    } catch (netErr) {
+      return { ok: false, status: 0, text: "", networkError: netErr };
+    }
   }
 
   async function callGeminiInteraction(payload) {
@@ -1405,16 +1409,29 @@
       [GEMINI_BETA_ENDPOINT, plainPayload]
     ];
 
-    let lastErr = null;
+    let lastErr = null;      // 서버가 돌려준 HTTP 오류 (가장 정보가 많음)
+    let lastNetErr = null;   // 네트워크/CORS 오류
     for (const [endpoint, body] of attempts) {
       const r = await postInteraction(endpoint, body, apiKey);
       if (r.ok) {
         return parseJsonSafe(extractInteractionText(JSON.parse(r.text)));
       }
+      if (r.networkError) {
+        console.error("[Gemini] network", endpoint, r.networkError);
+        lastNetErr = r.networkError;
+        continue;
+      }
       lastErr = describeGeminiError(r.status, r.text);
       console.error("[Gemini]", endpoint, r.status, r.text);
       // 키·권한·한도 문제는 다른 형식으로 재시도해도 소용없으므로 즉시 중단
       if (r.status !== 400 || lastErr.isKeyError || lastErr.hint) break;
+    }
+    if (!lastErr) {
+      throw new Error(
+        "Gemini 서버에 연결하지 못했습니다(네트워크). 와이파이/데이터 연결을 확인하고, " +
+        "데이터 절약·광고 차단·VPN 앱이 켜져 있다면 끄고 다시 시도해 주세요." +
+        (lastNetErr ? ` [원문] ${lastNetErr.message}` : "")
+      );
     }
     const err = new Error(
       `Gemini API 오류 (HTTP ${lastErr.status}${lastErr.reason ? ` · ${lastErr.reason}` : ""}): ` +
@@ -1460,8 +1477,7 @@
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-        "Api-Revision": "2026-05-20"
+        "x-goog-api-key": apiKey
       },
       body: JSON.stringify({
         model: NANO_BANANA_MODEL,
