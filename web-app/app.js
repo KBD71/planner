@@ -1354,24 +1354,86 @@
     return JSON.parse(s);
   }
 
+  function describeGeminiError(status, rawText) {
+    let message = String(rawText || "").slice(0, 400);
+    let reason = "";
+    try {
+      const j = JSON.parse(rawText);
+      const e = j.error || j;
+      message = e.message || message;
+      reason = (e.details || []).map((d) => d.reason || "").filter(Boolean).join(",") || e.status || "";
+    } catch (_) {}
+    const all = `${reason} ${message}`;
+    let hint = "";
+    if (/API_KEY_INVALID|API key not valid|API key expired/i.test(all)) {
+      hint = "API 키가 올바르지 않거나 만료되었습니다. 설정 탭에서 키를 다시 붙여넣어 주세요(앞뒤 공백·줄바꿈 주의).";
+    } else if (/location is not supported/i.test(all)) {
+      hint = "현재 위치/네트워크에서 Gemini API를 쓸 수 없습니다. VPN이 켜져 있다면 꺼 주세요.";
+    } else if (status === 403) {
+      hint = "API 키 사용 제한(웹사이트·앱 제한) 또는 권한 문제입니다. Google AI Studio에서 키 제한을 확인하세요.";
+    } else if (status === 404) {
+      hint = "선택한 모델을 이 키로 사용할 수 없습니다. 설정에서 다른 모델을 선택해 보세요.";
+    } else if (status === 429) {
+      hint = "사용량 한도를 넘었습니다. 잠시 후 다시 시도하거나 결제(유료 등급)를 확인하세요.";
+    } else if (status >= 500) {
+      hint = "Google 서버 일시 장애입니다. 잠시 후 다시 시도해 주세요.";
+    }
+    return { status, reason, message, hint, isKeyError: /API_KEY|API key/i.test(all) };
+  }
+
+  async function postInteraction(endpoint, payload, apiKey) {
+    const headers = { "Content-Type": "application/json", "x-goog-api-key": apiKey };
+    if (endpoint === GEMINI_BETA_ENDPOINT) headers["Api-Revision"] = "2026-05-20";
+    const res = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload) });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, text };
+  }
+
   async function callGeminiInteraction(payload) {
-    const apiKey = state.settings.geminiApiKey.trim();
+    const apiKey = String(state.settings.geminiApiKey || "").replace(/\s+/g, "");
     if (!apiKey) {
       throw new Error("설정 탭에서 Gemini API 키를 먼저 입력해 주세요.");
     }
-    const res = await fetch(GEMINI_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey
-      },
-      body: JSON.stringify(payload)
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      throw new Error(`Gemini API 오류 (HTTP ${res.status}): ${text}`);
+
+    // 1차: v1 → 2차: v1beta(같은 요청) → 3차: v1beta(스키마 없이 JSON 지시만)
+    const plainPayload = { ...payload };
+    delete plainPayload.response_format;
+    plainPayload.system_instruction = `${payload.system_instruction || ""}\n반드시 설명 없이 JSON 객체 하나만 출력하세요.`.trim();
+    const attempts = [
+      [GEMINI_ENDPOINT, payload],
+      [GEMINI_BETA_ENDPOINT, payload],
+      [GEMINI_BETA_ENDPOINT, plainPayload]
+    ];
+
+    let lastErr = null;
+    for (const [endpoint, body] of attempts) {
+      const r = await postInteraction(endpoint, body, apiKey);
+      if (r.ok) {
+        return parseJsonSafe(extractInteractionText(JSON.parse(r.text)));
+      }
+      lastErr = describeGeminiError(r.status, r.text);
+      console.error("[Gemini]", endpoint, r.status, r.text);
+      // 키·권한·한도 문제는 다른 형식으로 재시도해도 소용없으므로 즉시 중단
+      if (r.status !== 400 || lastErr.isKeyError || lastErr.hint) break;
     }
-    return parseJsonSafe(extractInteractionText(JSON.parse(text)));
+    const err = new Error(
+      `Gemini API 오류 (HTTP ${lastErr.status}${lastErr.reason ? ` · ${lastErr.reason}` : ""}): ` +
+      `${lastErr.hint ? `${lastErr.hint}\n` : ""}[원문] ${lastErr.message}`
+    );
+    err.gemini = lastErr;
+    throw err;
+  }
+
+  function showAiError(boxId, err) {
+    const box = $(boxId);
+    if (!box) return;
+    box.textContent = `⚠️ ${err.message}`;
+    box.style.display = "block";
+  }
+
+  function clearAiError(boxId) {
+    const box = $(boxId);
+    if (box) { box.textContent = ""; box.style.display = "none"; }
   }
 
   async function callNanoBananaBasicImage(base64Jpeg, parsed, profile) {
@@ -1453,6 +1515,7 @@
     const btn = $("btnRunDailyAi");
     btn.disabled = true;
     btn.textContent = "⏳ AI 분석 및 나노 바나나 기본형 그림 생성 중...";
+    clearAiError("dailyAiErrorBox");
 
     try {
       const profile = PROFILES[state.activeStudent];
@@ -1634,6 +1697,7 @@
       }
     } catch (err) {
       showToast(`분석 오류: ${err.message}`);
+      showAiError("dailyAiErrorBox", err);
     } finally {
       btn.disabled = false;
       btn.textContent = "✨ Gemini AI 플래너 분석 & 모범 그림 생성";
@@ -1815,6 +1879,7 @@
 
     const btn = $("btnRunWeeklyAi");
     btn.disabled = true;
+    clearAiError("weeklyAiErrorBox");
     btn.textContent = "⏳ Gemini AI가 누적 데이터를 분석하고 진도를 예측하는 중...";
 
     try {
@@ -1878,6 +1943,7 @@
       showToast("Gemini AI 주간 분석 · 예측 리포트를 최신화했습니다!");
     } catch (err) {
       showToast(`AI 분석 실패(통계 리포트는 유지됨): ${err.message}`);
+      showAiError("weeklyAiErrorBox", err);
     } finally {
       btn.disabled = false;
       btn.textContent = "✨ Gemini AI 심층 주간 분석·진도 예측 업데이트";
