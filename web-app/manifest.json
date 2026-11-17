@@ -1,0 +1,11 @@
+{
+  "name": "플래너 코치 AI - 2인용 학습 플래너 검사기",
+  "short_name": "플래너코치AI",
+  "description": "고등학생·초등학생 맞춤형 스터디 플래너 사진 교정, 색상 타임테이블, 손글씨 베껴쓰기, 주간 누적 분석 및 PDF/인쇄/구글 드라이브 연동",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#F1F5F9",
+  "theme_color": "#2563EB",
+  "lang": "ko",
+  "orientation": "portrait"
+}
