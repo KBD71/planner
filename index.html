@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#2563EB" />
+  <title>플래너 코치 AI · 2인용 학습 플래너 검사 & 주간 분석</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="header-inner">
+      <div class="header-top">
+        <div>
+          <h1 class="app-title">플래너 코치 AI · 김희균 전용</h1>
+          <p class="app-subtitle" id="headerSubtitle">🎓 김희균 · 10분 텐미닛 · bible71 패턴 분석</p>
+        </div>
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <span class="acc-badge" id="accDaysBadge">누적 0일</span>
+        </div>
+      </div>
+
+      <div class="student-switcher">
+        <button class="student-tab active" data-student="HIGH_SCHOOL" id="tabHighSchool">
+          🎓 <span id="hsLabelText">김희균</span> (고등)
+        </button>
+        <button class="student-tab" data-student="ELEMENTARY" id="tabElementary">
+          🌱 <span id="elLabelText">초등학생</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="container">
+    <!-- 1. 홈 대시보드 -->
+    <section class="tab-panel active" id="panel-home">
+      <div class="card">
+        <div class="card-title-row">
+          <h2 class="card-title" id="homeWeekTitle">이번 주 누적 현황</h2>
+          <span class="pill pill-emerald" id="homeStageBadge">Lv.1 씨앗기</span>
+        </div>
+        <div class="week-dots" id="weekDotsGrid"></div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnQuickCamera">📷 플래너 촬영</button>
+          <button class="btn btn-outline" id="btnQuickGallery">🖼️ 사진 불러오기</button>
+        </div>
+        <div style="margin-top: 8px;">
+          <button class="btn btn-outline btn-full" id="btnGoWeekly">📊 주간 공부 분석 · 예측 리포트 보기</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title-row">
+          <h2 class="card-title" id="homeBibleTitle">📖 매일 성경읽기 습관 (bible71 연동)</h2>
+          <button class="btn btn-ghost" id="btnRefreshBibleHome">🔄 DB 동기화</button>
+        </div>
+        <div class="bible-status-box" id="homeBibleSummaryBox">
+          <div class="bible-status-header">
+            <span class="bible-status-title" id="homeBibleStatusTitle">성경읽기 기록 확인 중...</span>
+            <span class="pill pill-emerald" id="homeBibleStreakPill">이번 주 0/7일</span>
+          </div>
+          <div class="bible-status-detail" id="homeBibleStatusDetail">
+            김희균 학생은 bible71 데이터베이스의 맥체인·매일성경·통독 기록을 자동으로 불러옵니다.
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title-row">
+          <h2 class="card-title">최근 검사 누적 기록 (<span id="recordCountText">0</span>건)</h2>
+          <button class="btn btn-ghost" id="btnSeedDemo">체험용 7일 샘플 채우기</button>
+        </div>
+        <div id="recordsListContainer"></div>
+      </div>
+    </section>
+
+    <!-- 2. 일일 플래너 검사 & 수정안 생성 -->
+    <section class="tab-panel" id="panel-inspect">
+      <div class="card">
+        <div class="card-title-row">
+          <h2 class="card-title" id="inspectTitle">🎓 고등학생 플래너 사진 검사</h2>
+          <span class="pill pill-blue" id="inspectSlotModeBadge">10분 텐미닛</span>
+        </div>
+
+        <div class="btn-row" style="margin-bottom: 12px;">
+          <button class="btn btn-primary" id="btnCapturePhoto">📷 카메라로 촬영</button>
+          <button class="btn btn-outline" id="btnPickPhoto">🖼️ 갤러리 선택</button>
+        </div>
+
+        <input type="file" id="inputCameraFile" accept="image/*" capture="environment" hidden />
+        <input type="file" id="inputGalleryFile" accept="image/*" hidden />
+
+        <div class="photo-preview-box" id="photoPreviewBox" style="display: none;">
+          <img id="uploadedPhotoImg" alt="촬영된 플래너 미리보기" />
+        </div>
+
+        <div class="field" style="margin-top: 12px;">
+          <label for="inputInspectDate">검사 날짜</label>
+          <input type="date" id="inputInspectDate" />
+        </div>
+
+        <!-- 김희균 전용 bible71 성경읽기 실시간 패턴 연동 박스 -->
+        <div class="bible-status-box" id="bible71InspectBox">
+          <div class="bible-status-header">
+            <span class="bible-status-title" id="bible71InspectTitle">📖 bible71 성경읽기 기록 (김희균)</span>
+            <button class="btn btn-ghost" id="btnFetchBibleForDate" style="padding: 2px 8px; font-size: 12px;">🔄 조회</button>
+          </div>
+          <div class="bible-status-detail" id="bible71InspectDetail">
+            선택한 날짜의 bible71 완독 기록을 조회 중입니다...
+          </div>
+          <div class="bible-status-detail" id="biblePatternDetail" style="margin-top: 6px; padding-top: 6px; border-top: 1px dashed #99f6e4; color: #0f766e; font-weight: 700;">
+          </div>
+        </div>
+
+        <!-- 초등학생 전용 종이 플래너 성경읽기 기록 박스 -->
+        <div class="bible-status-box" id="elemBibleInspectBox" style="display: none;">
+          <div class="bible-status-header">
+            <span class="bible-status-title">📖 초등 종이 플래너 성경읽기 기록</span>
+            <label style="font-size: 12px; font-weight: 700; display: flex; align-items: center; gap: 4px;">
+              <input type="checkbox" id="inputElemBibleDone" /> 오늘 읽음 확인
+            </label>
+          </div>
+          <div class="btn-row" style="margin-top: 6px;">
+            <input type="text" id="inputElemBiblePassage" placeholder="예: 잠언 1장, 마태복음 5장" style="padding: 8px 10px; border-radius: 10px; border: 1.5px solid var(--border); font-size: 13px;" />
+            <input type="number" id="inputElemBibleChapters" min="0" max="50" value="1" placeholder="장수" style="padding: 8px 10px; border-radius: 10px; border: 1.5px solid var(--border); font-size: 13px;" />
+          </div>
+          <div class="bible-status-detail" id="elemBiblePatternDetail" style="margin-top: 6px; color: #0f766e; font-weight: 700;">
+          </div>
+          <div style="font-size: 11.5px; color: var(--text-sub); margin-top: 4px;">
+            * AI가 종이 플래너 사진에서 성경읽기 기록을 읽으면 자동으로 채워지며, 관리자가 직접 수정할 수도 있습니다.
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="selectFocusHabit">🎯 관리자 이번 주 집중 코칭 습관 (1가지씩 정복)</label>
+          <select id="selectFocusHabit">
+            <option value="BIBLE_AND_VOLUME">1단계: 매일 성경읽기 + [교재명·쪽수] 구체적 분량 쓰기</option>
+            <option value="COLOR_TIMETABLE">2단계: 공부한 시간만큼 과목별 색깔로 타임테이블 칠하기</option>
+            <option value="SELF_REVIEW_PAIR">3단계: 인강/수업 직후 20분 자습·복습 블록 짝짓기</option>
+            <option value="NEXT_DAY_RESERVE">4단계: 하루 마감 & 내일 첫 공부·말씀 시간 미리 예약하기</option>
+          </select>
+        </div>
+
+        <div class="toggle-row" style="margin-bottom: 8px;">
+          <div>
+            <div style="font-weight: 700; font-size: 13.5px;">✅ 어제 베껴쓴 약속을 오늘 종이 플래너에서 지켰나요?</div>
+            <div style="font-size: 12px; color: var(--text-sub);">관리자 확인 시 +10점 습관 보너스와 칭찬 배지가 리포트에 표시됩니다</div>
+          </div>
+          <input type="checkbox" id="checkboxKeptYesterdayPromise" style="width: 20px; height: 20px;" />
+        </div>
+
+        <div class="field">
+          <label for="inputTeacherMemo">지도자 참고 메모 (선택)</label>
+          <input type="text" id="inputTeacherMemo" placeholder="예: 오늘은 수학 오답과 성경읽기 시간 배치 위주로 교정해 주세요" />
+        </div>
+
+        <button class="btn btn-indigo btn-full" id="btnRunDailyAi">✨ Gemini AI 플래너 분석 & 모범 그림 생성</button>
+      </div>
+
+      <div id="dailyResultSection" style="display: none; flex-direction: column; gap: 14px;">
+        <div class="card">
+          <div class="card-title-row">
+            <h2 class="card-title">전송 · PDF 저장 · 프린터 인쇄 · 드라이브</h2>
+          </div>
+          <div class="btn-row-4">
+            <button class="btn btn-kakao" id="btnDailyKakao">💬 카톡 전송</button>
+            <button class="btn btn-outline" id="btnDailyPdf">📄 PDF 저장</button>
+            <button class="btn btn-outline" id="btnDailyPrint">🖨️ 인쇄하기</button>
+            <button class="btn btn-emerald" id="btnDailyDrive">☁️ 드라이브 저장</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title-row">
+            <h2 class="card-title">✍️ 보내기 전 베껴쓰기(필사) · 수정 방향 손질</h2>
+          </div>
+          <div class="field">
+            <label for="editSummaryInput">핵심 수정 방향</label>
+            <textarea id="editSummaryInput" rows="2"></textarea>
+          </div>
+          <div class="field">
+            <label for="editPromiseInput">오늘의 플래너 약속 (베껴쓰기 1)</label>
+            <textarea id="editPromiseInput" rows="2"></textarea>
+          </div>
+          <div class="field">
+            <label for="editPracticeInput">수정 연습 문장 (베껴쓰기 2)</label>
+            <textarea id="editPracticeInput" rows="2"></textarea>
+          </div>
+          <button class="btn btn-primary btn-full" id="btnApplyCopywritingEdit">수정 내용 그림 카드에 즉시 반영</button>
+        </div>
+
+        <div class="card" id="nanoBananaPreviewCard" style="display: none;">
+          <div class="card-title-row">
+            <h2 class="card-title">🍌 나노 바나나 기본형 (모범 첨삭 플래너 그림)</h2>
+            <span class="pill pill-blue">gemini-nano-banana-2.1</span>
+          </div>
+          <div class="canvas-preview-wrap">
+            <img id="nanoBananaRenderedImg" alt="나노 바나나 생성 모범 플래너 그림" />
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title-row">
+            <h2 class="card-title">생성된 모범 플래너 수정안 카드</h2>
+            <span class="pill pill-amber">색상 구분 + 손글씨 필사</span>
+          </div>
+          <div class="canvas-preview-wrap">
+            <img id="dailyRenderedImg" alt="생성된 모범 플래너 수정안" />
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 주간 공부 분석 & 예측 리포트 -->
+    <section class="tab-panel" id="panel-weekly">
+      <div class="card">
+        <div class="card-title-row">
+          <h2 class="card-title">📊 주간 공부 분석 & 다음 주 목표 리포트</h2>
+        </div>
+
+        <div class="chip-group" style="margin-bottom: 12px;">
+          <button class="chip-btn active" data-week-offset="0">이번 주</button>
+          <button class="chip-btn" data-week-offset="1">지난주</button>
+          <button class="chip-btn" data-week-offset="2">2주 전</button>
+        </div>
+
+        <button class="btn btn-indigo btn-full" id="btnRunWeeklyAi" style="margin-bottom: 12px;">
+          ✨ Gemini AI 심층 주간 분석·진도 예측 업데이트
+        </button>
+
+        <div class="btn-row-4">
+          <button class="btn btn-kakao" id="btnWeeklyKakao">💬 카톡 전송</button>
+          <button class="btn btn-outline" id="btnWeeklyPdf">📄 PDF 저장</button>
+          <button class="btn btn-outline" id="btnWeeklyPrint">🖨️ 인쇄하기</button>
+          <button class="btn btn-emerald" id="btnWeeklyDrive">☁️ 드라이브 저장</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title-row">
+          <h2 class="card-title">주간 인포그래픽 리포트 미리보기</h2>
+          <span class="pill pill-emerald" id="weeklyStagePill">Lv.1 씨앗기</span>
+        </div>
+        <div class="canvas-preview-wrap">
+          <img id="weeklyRenderedImg" alt="주간 공부 분석 리포트" />
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. 설정 · API 키 · 구글 드라이브 연동 -->
+    <section class="tab-panel" id="panel-settings">
+      <div class="card">
+        <h2 class="card-title" style="margin-bottom: 12px;">1. Gemini API 키 & 나노 바나나 기본형 이미지 설정</h2>
+        <div class="field">
+          <label for="settingApiKey">보유하신 Gemini API Key (브라우저/기기 내부에만 안전 저장)</label>
+          <input type="password" id="settingApiKey" placeholder="AIza..." />
+        </div>
+        <div class="field">
+          <label for="settingModel">Gemini 분석 모델</label>
+          <select id="settingModel">
+            <option value="gemini-4-hydrogen">gemini-4-hydrogen (기본 · 빠르고 정확한 멀티모달)</option>
+            <option value="gemini-4-argon">gemini-4-argon (고난도 추론 · 정밀 코칭)</option>
+            <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (초고속 · 최저비용)</option>
+          </select>
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div style="font-weight: 700; font-size: 14px;">🍌 나노 바나나 기본형(gemini-nano-banana-2.1) 그림 생성</div>
+            <div style="font-size: 12px; color: var(--text-sub);">원본 플래너 사진에 색상 타임테이블·빨간펜 첨삭을 직접 입힌 모범 그림을 생성합니다</div>
+          </div>
+          <input type="checkbox" id="settingUseNanoBanana" checked style="width: 20px; height: 20px;" />
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title" style="margin-bottom: 12px;">2. 2인용 학습자 이름 & PDF/인쇄 옵션</h2>
+        <div class="field">
+          <label for="settingHsName">🎓 고등학생 이름 (전용)</label>
+          <input type="text" id="settingHsName" value="김희균" />
+        </div>
+        <div class="field">
+          <label for="settingElName">🌱 초등학생 이름/별칭</label>
+          <input type="text" id="settingElName" value="초등학생" />
+        </div>
+        <div class="toggle-row">
+          <div>
+            <div style="font-weight: 700; font-size: 14px;">PDF/인쇄용 손글씨 베껴쓰기 줄 포함</div>
+            <div style="font-size: 12px; color: var(--text-sub);">종이로 인쇄하거나 PDF 저장 시 하단에 직접 쓸 빈 줄을 추가합니다</div>
+          </div>
+          <input type="checkbox" id="settingPdfLines" checked style="width: 20px; height: 20px;" />
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title" style="margin-bottom: 8px;">3. bible71 성경읽기 데이터베이스 연동 (김희균 전용)</h2>
+        <p style="font-size: 12.5px; color: var(--text-sub); margin-top: 0;">
+          김희균 학생이 <code>bible71</code> 앱에 기록한 맥체인·매일성경·통독 기록을 Supabase DB에서 직접 읽어와 플래너 검사 및 주간 리포트에 합산합니다. (초등학생은 종이 플래너 사진/입력으로 기록)
+        </p>
+        <div class="btn-row">
+          <div class="field" style="margin-bottom: 0;">
+            <label for="settingBibleMemberName">bible71 등록 이름</label>
+            <input type="text" id="settingBibleMemberName" value="김희균" />
+          </div>
+          <div class="field" style="margin-bottom: 0;">
+            <label for="settingBibleMemberPhone">bible71 전화번호</label>
+            <input type="text" id="settingBibleMemberPhone" value="01023708994" />
+          </div>
+        </div>
+        <button class="btn btn-outline btn-full" id="btnSyncBibleNow" style="margin-top: 10px;">📖 bible71 성경읽기 기록 지금 동기화</button>
+      </div>
+
+      <div class="card">
+        <h2 class="card-title" style="margin-bottom: 8px;">4. 내 구글 드라이브 데이터 누적 연동</h2>
+        <p style="font-size: 12.5px; color: var(--text-sub); margin-top: 0;">
+          검사 기록(JSON 백업, 구글시트 호환 CSV, 리포트 PNG & A4 PDF)을 내 구글 드라이브에 차곡차곡 저장합니다.
+        </p>
+
+        <div class="field">
+          <label for="settingWebhookUrl">Google Apps Script 웹훅 URL (구글 드라이브 + 시트 자동 누적)</label>
+          <input type="url" id="settingWebhookUrl" placeholder="https://script.google.com/macros/s/.../exec" />
+        </div>
+
+        <div class="toggle-row">
+          <div>
+            <div style="font-weight: 700; font-size: 14px;">일일 검사 완료 시 구글 드라이브 자동 저장</div>
+            <div style="font-size: 12px; color: var(--text-sub);">웹훅 URL 또는 로컬 드라이브 동기화 폴더가 연결된 경우 자동 전송</div>
+          </div>
+          <input type="checkbox" id="settingAutoSync" checked style="width: 20px; height: 20px;" />
+        </div>
+
+        <div class="btn-row" style="margin-top: 10px;">
+          <button class="btn btn-outline" id="btnConnectDriveFolder">📁 드라이브 동기화 폴더 연결</button>
+          <button class="btn btn-outline" id="btnSyncFromWebhook">☁️ 드라이브에서 복원</button>
+        </div>
+
+        <div class="btn-row" style="margin-top: 8px;">
+          <button class="btn btn-outline" id="btnExportBackupJson">💾 전체 JSON 백업 저장</button>
+          <button class="btn btn-outline" id="btnExportStudentCsv">📊 현재 학생 CSV 내보내기</button>
+        </div>
+
+        <div class="field" style="margin-top: 10px; margin-bottom: 0;">
+          <label for="inputRestoreBackupFile">백업 JSON 파일 불러오기</label>
+          <input type="file" id="inputRestoreBackupFile" accept=".json,application/json" />
+        </div>
+      </div>
+
+      <button class="btn btn-primary btn-full" id="btnSaveSettings">설정 저장하기</button>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-tab="home"><span class="nav-icon">🏠</span><span>홈</span></button>
+    <button class="nav-btn" data-tab="inspect"><span class="nav-icon">📷</span><span>플래너 검사</span></button>
+    <button class="nav-btn" data-tab="weekly"><span class="nav-icon">📊</span><span>주간리포트</span></button>
+    <button class="nav-btn" data-tab="settings"><span class="nav-icon">⚙️</span><span>설정·드라이브</span></button>
+  </nav>
+
+  <div class="toast" id="toastBox"></div>
+
+  <!-- A4 인쇄 전용 영역 -->
+  <div class="print-only-sheet" id="printOnlySheet">
+    <img id="printSheetImg" alt="A4 인쇄용 리포트" />
+  </div>
+
+  <script src="mccheyne-map.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
