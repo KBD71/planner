@@ -2624,11 +2624,33 @@
     });
   }
 
+  function applyKeyFromUrlHash() {
+    try {
+      const hash = String(window.location?.hash || "");
+      if (!hash.startsWith("#")) return false;
+      const params = new URLSearchParams(hash.slice(1));
+      const key = (params.get("key") || params.get("k") || "").trim();
+      if (!key) return false;
+      state.settings.geminiApiKey = key;
+      saveSettings();
+      if (window.history && typeof window.history.replaceState === "function") {
+        window.history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function init() {
     loadPersisted();
+    const keyFromHash = applyKeyFromUrlHash();
     bindEvents();
     refreshAllViews();
     fetchBible71LogsFromDb(false);
+    if (keyFromHash) {
+      showToast("URL에서 Gemini API 키를 안전하게 저장했습니다!");
+    }
   }
 
   window.addEventListener("DOMContentLoaded", init);
