@@ -6,6 +6,14 @@
   const STORAGE_BIBLE71_CACHE_KEY = "planner_bible71_cache_v1";
   // 2026-11-18 사용자 요청: 기존 분석 기록 1회 전체 삭제 (기기·브라우저별 최초 1회 실행)
   const STORAGE_PURGE_FLAG_KEY = "planner_records_purged_20261118";
+  // ---- Supabase 클라우드 (관리자 페이지에서만 사용) ----
+  const SB_CONF = window.PLANNER_SUPABASE || null;
+  const IS_ADMIN_PAGE = Boolean(document.getElementById("panel-home"));
+  const sb = (IS_ADMIN_PAGE && SB_CONF && window.supabase && typeof window.supabase.createClient === "function")
+    ? window.supabase.createClient(SB_CONF.url, SB_CONF.publishableKey)
+    : null;
+  const CLOUD = Boolean(sb);
+  const HABIT_KEYS = ["VOLUME_SPECIFIED", "COLOR_TIMETABLE", "REVIEW_PAIR", "NEXT_DAY_RESERVE", "BIBLE", "CLASS_SUMMARY"];
   const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1/interactions";
   const GEMINI_BETA_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
   const NANO_BANANA_MODEL = "gemini-nano-banana-2.1";
@@ -75,7 +83,20 @@
       autoSyncToDrive: true,
       includeHandwritingPracticeInPdf: true,
       hsSchoolHours: "08:00-16:30",
-      elSchoolHours: "09:00-13:30"
+      elSchoolHours: "09:00-13:30",
+      analysisEngine: "gemini",           // gemini | mlx | mlx_then_gemini
+      mlxBaseUrl: "http://localhost:11234",
+      mlxModel: "mlx-community/gemma-4-26b-a4b-it-8bit",
+      reportMode: "image"                 // image(그림 포함) | report(보고서만)
+    },
+    cloud: {
+      user: null,
+      profile: null,
+      profiles: [],
+      studentProfiles: { HIGH_SCHOOL: null, ELEMENTARY: null },
+      submissions: [],
+      currentSubmission: null,
+      materials: []
     },
     uploadedImageDataUrl: null,
     currentDailyResult: null,
@@ -141,14 +162,31 @@
   }
 
   function saveRecords() {
+    if (CLOUD) return; // 클라우드 모드에서는 Supabase가 원본
     localStorage.setItem(STORAGE_RECORDS_KEY, JSON.stringify(state.records));
   }
 
   function saveSettings() {
     localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(state.settings));
+    if (CLOUD && state.cloud.profile?.role === "admin") {
+      sb.from("admin_settings").update({ settings: state.settings }).eq("id", 1)
+        .then(({ error }) => { if (error) console.error("[cloud] settings", error); });
+    }
+  }
+
+  function newUuid() {
+    if (window.crypto && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+    const b = new Uint8Array(16);
+    crypto.getRandomValues(b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
   }
 
   function studentName(profileId = state.activeStudent) {
+    const cp = state.cloud?.studentProfiles?.[profileId];
+    if (cp && cp.display_name) return cp.display_name;
     return profileId === "HIGH_SCHOOL"
       ? (state.settings.highSchoolName || "김희균").trim()
       : (state.settings.elementaryName || "초등학생").trim();
@@ -1599,7 +1637,7 @@
       showToast("먼저 플래너 사진을 촬영하거나 선택해 주세요.");
       return;
     }
-    if (!state.settings.geminiApiKey.trim()) {
+    if (state.settings.analysisEngine === "gemini" && !state.settings.geminiApiKey.trim()) {
       switchTab("settings");
       showToast("설정 탭에서 Gemini API 키를 입력해 주세요.");
       return;
@@ -1609,6 +1647,9 @@
     btn.disabled = true;
     btn.textContent = "⏳ AI 분석 및 나노 바나나 기본형 그림 생성 중...";
     clearAiError("dailyAiErrorBox");
+    if (CLOUD && state.cloud.currentSubmission) {
+      sb.from("submissions").update({ status: "analyzing" }).eq("id", state.cloud.currentSubmission.id).then(() => {});
+    }
 
     try {
       const profile = PROFILES[state.activeStudent];
@@ -1648,7 +1689,18 @@
           `timeBlocks에는 학교 수업 시간을 subject "학교수업", studyMode "LECTURE", label "학교 수업" 블록 하나로 넣되, totalStudyMinutes·selfStudyMinutes·lectureMinutes·reviewMinutes와 계획 수(planned/completedTasksCount)는 학교 수업을 제외한 방과후 자기주도 학습만으로 계산하세요. ` +
           `수업 요약이 부실하면 improvementSummary와 weakHabitTags(예: #수업요약)에 반영하고, 방과후 복습은 그날 수업 요약과 연결해 제안하세요.`
         : `\n[주말/휴일] 학교 수업이 없는 날입니다. classSummaries는 빈 배열로 반환하세요.`;
-      const systemInstructionFull = systemInstruction + schoolRule;
+      const knownMaterials = (state.cloud.materials || [])
+        .filter((m) => m.student_id === state.cloud.studentProfiles[profile.id]?.id)
+        .map((m) => `${m.subject_name || "과목"}: ${m.title} (${m.unit_type}${m.current_position != null ? `, ${m.current_position}${m.unit_type}까지 함` : ""})`);
+      const trackingRule =
+        `\n[진도·습관 자동 기록] 플래너의 공부 항목마다 studyTasks에 한 줄씩 담으세요. ` +
+        `subject(과목), material(교재·인강 이름), unitType(쪽/강/문항/회/장/단원 중 하나), plannedStart/plannedEnd(계획 범위 숫자, 예: 쎈 p.30~35 → 30, 35), ` +
+        `doneStart/doneEnd(완료 표시(체크·동그라미·색칠·O)가 있는 범위만 숫자로, 일부만 했으면 한 데까지, 안 했거나 알 수 없으면 null), ` +
+        `plannedMinutes/actualMinutes(알 수 있으면), studyMode(SELF_STUDY/LECTURE/REVIEW), status(DONE/PARTIAL/NOT_DONE/UNKNOWN), rawText(플래너에 적힌 원문)를 채우세요. ` +
+        `교재 이름은 아래 [등록된 교재]에 같은 교재가 있으면 그 이름을 글자 그대로 쓰고, 처음 보는 교재일 때만 사진에 적힌 이름으로 새로 쓰세요. 숫자를 읽을 수 없으면 null로 두고 지어내지 마세요. ` +
+        `habitChecks에는 ${HABIT_KEYS.join(", ")} 각각에 대해 오늘 플래너가 그 습관을 지켰는지 passed(true/false)와 짧은 note를 담으세요(CLASS_SUMMARY는 평일에만). ` +
+        `\n[등록된 교재]\n${knownMaterials.length ? knownMaterials.join("\n") : "(아직 없음)"}`;
+      const systemInstructionFull = systemInstruction + schoolRule + trackingRule;
 
       const bibleContextLine = profile.id === "HIGH_SCHOOL"
         ? `bible71 성경읽기(${dateIso}): ${bibleInfo.completed ? `완료 (${bibleInfo.passageText}, 총 ${bibleInfo.chaptersCount}장)` : "미기록"} | 날짜별 패턴: ${biblePattern.patternSummary} | 다음 날 제안: ${biblePattern.nextDaySuggestion}`
@@ -1674,7 +1726,7 @@
           "totalStudyMinutes", "selfStudyMinutes", "lectureMinutes", "reviewMinutes",
           "plannedTasksCount", "completedTasksCount", "copywritingPromise", "copywritingPractice",
           "bibleReadingCompleted", "biblePassageText", "bibleChaptersCount",
-          "classSummaries"
+          "classSummaries", "studyTasks", "habitChecks"
         ],
         properties: {
           habitScore: { type: "integer" },
@@ -1693,6 +1745,39 @@
           bibleReadingCompleted: { type: "boolean" },
           biblePassageText: { type: "string" },
           bibleChaptersCount: { type: "integer" },
+          studyTasks: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["subject", "material", "unitType", "plannedStart", "plannedEnd", "doneStart", "doneEnd", "plannedMinutes", "actualMinutes", "studyMode", "status", "rawText"],
+              properties: {
+                subject: { type: "string" },
+                material: { type: "string" },
+                unitType: { type: "string", enum: ["쪽", "강", "문항", "회", "장", "단원"] },
+                plannedStart: { type: ["number", "null"] },
+                plannedEnd: { type: ["number", "null"] },
+                doneStart: { type: ["number", "null"] },
+                doneEnd: { type: ["number", "null"] },
+                plannedMinutes: { type: ["integer", "null"] },
+                actualMinutes: { type: ["integer", "null"] },
+                studyMode: { type: "string", enum: ["SELF_STUDY", "LECTURE", "REVIEW"] },
+                status: { type: "string", enum: ["DONE", "PARTIAL", "NOT_DONE", "UNKNOWN"] },
+                rawText: { type: "string" }
+              }
+            }
+          },
+          habitChecks: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["key", "passed", "note"],
+              properties: {
+                key: { type: "string", enum: HABIT_KEYS },
+                passed: { type: "boolean" },
+                note: { type: "string" }
+              }
+            }
+          },
           classSummaries: {
             type: "array",
             items: {
@@ -1740,23 +1825,15 @@
         }
       };
 
-      const parsed = await callGeminiInteraction({
-        model: state.settings.geminiModel || "gemini-4-hydrogen",
-        system_instruction: systemInstructionFull,
-        store: false,
-        input: [
-          { type: "text", text: promptText },
-          { type: "image", data: base64Jpeg, mime_type: "image/jpeg" }
-        ],
-        response_format: {
-          type: "text",
-          mime_type: "application/json",
-          schema: schemaObj
-        }
+      const parsed = await runAnalysisEngine({
+        system: systemInstructionFull,
+        prompt: promptText,
+        imageB64: base64Jpeg,
+        schema: schemaObj
       });
 
       let nanoBananaDataUrl = null;
-      if (state.settings.useNanoBanana && state.settings.geminiApiKey.trim()) {
+      if (state.settings.reportMode !== "report" && state.settings.useNanoBanana !== false && state.settings.geminiApiKey.trim()) {
         nanoBananaDataUrl = await callNanoBananaBasicImage(base64Jpeg, parsed, profile).catch(() => null);
       }
 
@@ -1774,7 +1851,7 @@
       const bonusScore = Math.min(100, rawScore + (keptYesterdayPromise ? 10 : 0));
 
       const record = {
-        id: crypto.randomUUID ? crypto.randomUUID() : `rec_${Date.now()}`,
+        id: newUuid(),
         studentType: state.activeStudent,
         studentName: name,
         dateIso,
@@ -1799,6 +1876,12 @@
         biblePatternSummary: biblePattern.patternSummary,
         bibleNextSuggestion: biblePattern.nextDaySuggestion,
         nanoBananaImageDataUrl: nanoBananaDataUrl,
+        studyTasks: Array.isArray(parsed.studyTasks) ? parsed.studyTasks : [],
+        habitChecks: Array.isArray(parsed.habitChecks) ? parsed.habitChecks : [],
+        engine: state.lastEngineUsed || state.settings.analysisEngine,
+        reportMode: state.settings.reportMode || "image",
+        submissionId: state.cloud.currentSubmission?.id || null,
+        dbStatus: "draft",
         isSchoolDay: schoolDay,
         schoolHours: schoolDay ? schoolHours : "",
         classSummaries: schoolDay && Array.isArray(parsed.classSummaries) ? parsed.classSummaries : [],
@@ -1810,6 +1893,25 @@
 
       state.records.unshift(record);
       saveRecords();
+      if (CLOUD) {
+        try {
+          if (record.submissionId) {
+            const olds = state.records.filter((r) => r !== record && r.submissionId === record.submissionId);
+            for (const o of olds) {
+              if (o.dbStatus === "sent") { record.submissionId = null; continue; }
+              await cloudDeleteRecord(o.id);
+              state.records = state.records.filter((r) => r !== o);
+            }
+          }
+          await cloudSaveRecord(record);
+          if (record.submissionId) {
+            await sb.from("submissions").update({ status: "analyzed", error_message: null }).eq("id", record.submissionId);
+          }
+          await cloudLoadSubmissions();
+        } catch (e) {
+          showAiError("dailyAiErrorBox", new Error(`분석은 됐지만 클라우드 저장에 실패했습니다: ${e.message || e}`));
+        }
+      }
       await openDailyResult(record);
       refreshAllViews();
 
@@ -1823,6 +1925,10 @@
     } catch (err) {
       showToast(`분석 오류: ${err.message}`);
       showAiError("dailyAiErrorBox", err);
+      if (CLOUD && state.cloud.currentSubmission) {
+        sb.from("submissions").update({ status: "submitted", error_message: String(err.message || err).slice(0, 500) })
+          .eq("id", state.cloud.currentSubmission.id).then(() => {});
+      }
     } finally {
       btn.disabled = false;
       btn.textContent = "✨ Gemini AI 플래너 분석 & 모범 그림 생성";
@@ -2013,6 +2119,16 @@
         `분석 단계: ${baseReport.stage.badgeText} (총 누적 ${baseReport.totalAccumulatedDays}일)`,
         `이번 주 공부시간: ${baseReport.totalStudyMinutes}분 (전주 대비: ${baseReport.prevWeekDeltaMinutes ?? "없음"}분)`,
         `순공 비율: ${baseReport.selfStudyRatioPercent}%, 계획 달성률: ${baseReport.completionRatePercent}%`,
+        (() => {
+          const sid = state.cloud.studentProfiles[baseReport.studentType]?.id;
+          const ms = (state.cloud.materials || []).filter((m) => m.student_id === sid);
+          if (!ms.length) return "교재별 진도: 기록 없음";
+          return "교재별 진도:\n" + ms.map((m) => `- ${m.subject_name || ""} ${m.title}: ${m.current_position ?? "-"}${m.unit_type}까지` +
+            (m.total_units ? `/전체 ${m.total_units}${m.unit_type} (${m.progress_pct ?? "-"}%)` : "") +
+            (Number(m.pace_per_day_14d) > 0 ? `, 최근 하루 ${m.pace_per_day_14d}${m.unit_type}` : "") +
+            (m.predicted_finish ? `, 예상 완료 ${m.predicted_finish}` : "") +
+            (m.target_date ? `, 목표 ${m.target_date}` : "")).join("\n");
+        })(),
         (() => {
           const sd = baseReport.thisWeekRecords.filter((r) => r.isSchoolDay);
           if (!sd.length) return "평일 수업 요약: 기록 없음";
@@ -2349,6 +2465,15 @@
     }
 
     let nanoImgEl = null;
+    if (CLOUD && !record.nanoBananaImageDataUrl && record.imagePath && record.reportMode !== "report") {
+      const signed = await sb.storage.from(SB_CONF.imageBucket).createSignedUrl(record.imagePath, 600);
+      if (!signed.error) record.nanoBananaImageDataUrl = await urlToDataUrl(signed.data.signedUrl).catch(() => null);
+    }
+    if ($("btnSendToStudent")) {
+      $("btnSendToStudent").style.display = CLOUD ? "block" : "none";
+      $("btnSendToStudent").textContent = record.dbStatus === "sent" ? "✅ 학생에게 보냄 (수정 내용 다시 보내기)" : "📤 학생에게 보내기";
+    }
+    if (record.reportMode === "report") record.nanoBananaImageDataUrl = null;
     if (record.nanoBananaImageDataUrl) {
       $("nanoBananaPreviewCard").style.display = "block";
       $("nanoBananaRenderedImg").src = record.nanoBananaImageDataUrl;
@@ -2408,7 +2533,7 @@
         <div class="record-item" data-rec-id="${r.id}">
           <div class="score-box">${r.habitScore}점</div>
           <div class="record-meta">
-            <div class="record-title">${r.dateIso} · ${formatMinutes(r.totalStudyMinutes)} · ${r.bibleCompleted ? "📖성경✓" : "📖미완"} (달성 ${completionRate(r)}%)</div>
+            <div class="record-title">${r.dateIso} · ${formatMinutes(r.totalStudyMinutes)} · ${r.bibleCompleted ? "📖성경✓" : "📖미완"} (달성 ${completionRate(r)}%)${CLOUD ? (r.dbStatus === "sent" ? " · ✅보냄" : " · 📝미발송") : ""}</div>
             <div class="record-sub">${r.copywritingPromise || ""}</div>
           </div>
           <button class="btn btn-ghost" data-del-id="${r.id}" title="삭제">🗑️</button>
@@ -2420,8 +2545,10 @@
           const delId = e.target?.dataset?.delId;
           if (delId) {
             e.stopPropagation();
+            if (CLOUD && !confirm("이 리포트를 삭제할까요? 학생에게 보낸 리포트라면 학생 앱에서도 사라집니다.")) return;
             state.records = state.records.filter((r) => r.id !== delId);
             saveRecords();
+            if (CLOUD) cloudDeleteRecord(delId).catch((err) => showToast(`삭제 실패: ${err.message}`));
             refreshAllViews();
             showToast("기록을 삭제했습니다.");
             return;
@@ -2435,6 +2562,11 @@
       });
     }
 
+    if (CLOUD) {
+      renderInbox();
+      renderMaterials();
+      if ($("btnSeedDemo")) $("btnSeedDemo").style.display = "none";
+    }
     state.currentWeeklyReport = buildWeeklyReportLocal();
     renderWeeklyPreview();
     if (state.currentDailyResult && state.currentDailyResult.studentType === state.activeStudent) {
@@ -2552,6 +2684,7 @@
 
   function handlePhotoInput(file) {
     if (!file) return;
+    if (state.cloud) state.cloud.currentSubmission = null;
     const reader = new FileReader();
     reader.onload = () => {
       state.uploadedImageDataUrl = reader.result;
@@ -2575,6 +2708,10 @@
     $("settingWebhookUrl").value = state.settings.googleAppsScriptWebhookUrl || "";
     $("settingAutoSync").checked = Boolean(state.settings.autoSyncToDrive);
     $("settingPdfLines").checked = Boolean(state.settings.includeHandwritingPracticeInPdf);
+    $("settingEngine").value = state.settings.analysisEngine || "gemini";
+    $("settingMlxUrl").value = state.settings.mlxBaseUrl || "http://localhost:11234";
+    $("settingMlxModel").value = state.settings.mlxModel || "mlx-community/gemma-4-26b-a4b-it-8bit";
+    $("settingReportMode").value = state.settings.reportMode || "image";
     $("settingHsSchoolHours").value = state.settings.hsSchoolHours || "08:00-16:30";
     $("settingElSchoolHours").value = state.settings.elSchoolHours || "09:00-13:30";
   }
@@ -2588,7 +2725,8 @@
       "bibleMemberName", "bibleMemberPhone",
       "focusHabit", "googleAppsScriptWebhookUrl",
       "autoSyncToDrive", "includeHandwritingPracticeInPdf",
-      "hsSchoolHours", "elSchoolHours"
+      "hsSchoolHours", "elSchoolHours",
+      "analysisEngine", "mlxBaseUrl", "mlxModel", "reportMode"
     ];
     let changed = false;
     for (const k of allowedKeys) {
@@ -2655,6 +2793,7 @@
         state.currentDailyResult.bibleChaptersCount = Number($("inputElemBibleChapters").value) || 0;
       }
       saveRecords();
+      if (CLOUD) cloudSaveRecord(state.currentDailyResult).catch((e) => showToast(`저장 실패: ${e.message}`));
       openDailyResult(state.currentDailyResult);
       refreshAllViews();
       showToast("수정된 필사 문구와 성경·코멘트를 그림 카드에 반영했습니다!");
@@ -2707,8 +2846,14 @@
       const n = state.records.length;
       if (!n) { showToast("삭제할 분석 기록이 없습니다."); return; }
       if (!window.confirm(`이 기기에 저장된 분석 기록 ${n}건(두 학생 모두)을 모두 삭제할까요? 되돌릴 수 없습니다.`)) return;
+      const ids = state.records.map((r) => r.id);
       state.records = [];
       saveRecords();
+      if (CLOUD) {
+        sb.from("reports").delete().in("id", ids).then(({ error }) => {
+          if (error) showToast(`클라우드 삭제 실패: ${error.message}`);
+        });
+      }
       state.currentDailyResult = null;
       state.currentWeeklyReport = null;
       $("dailyResultSection").style.display = "none";
@@ -2730,8 +2875,13 @@
         autoSyncToDrive: $("settingAutoSync").checked,
         includeHandwritingPracticeInPdf: $("settingPdfLines").checked,
         hsSchoolHours: $("settingHsSchoolHours").value.trim() || "08:00-16:30",
-        elSchoolHours: $("settingElSchoolHours").value.trim() || "09:00-13:30"
+        elSchoolHours: $("settingElSchoolHours").value.trim() || "09:00-13:30",
+        analysisEngine: $("settingEngine").value || "gemini",
+        mlxBaseUrl: $("settingMlxUrl").value.trim() || "http://localhost:11234",
+        mlxModel: $("settingMlxModel").value.trim() || "mlx-community/gemma-4-26b-a4b-it-8bit",
+        reportMode: $("settingReportMode").value || "image"
       };
+      state.settings.useNanoBanana = state.settings.reportMode !== "report" && $("settingUseNanoBanana").checked;
       saveSettings();
       refreshAllViews();
       fetchBible71LogsFromDb(false);
@@ -2861,18 +3011,451 @@
     }
   }
 
+  // ==================== Supabase 클라우드 ====================
+
+  function urlToDataUrl(url) {
+    return fetch(url).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.blob();
+    }).then((b) => new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(fr.result);
+      fr.onerror = reject;
+      fr.readAsDataURL(b);
+    }));
+  }
+
+  function dataUrlToBlob(dataUrl) {
+    const [head, b64] = String(dataUrl).split(",");
+    const mime = (head.match(/data:([^;]+)/) || [])[1] || "image/png";
+    const bin = atob(b64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return new Blob([arr], { type: mime });
+  }
+
+  function profileTypeById(studentId) {
+    const p = state.cloud.profiles.find((x) => x.id === studentId);
+    return p?.student_type || "HIGH_SCHOOL";
+  }
+
+  const LOCAL_ONLY_KEYS = ["id", "dbStatus", "submissionId", "imagePath", "nanoBananaImageDataUrl", "sentAt", "studentId"];
+
+  function resultFromRecord(rec) {
+    const out = {};
+    for (const [k, v] of Object.entries(rec)) {
+      if (!LOCAL_ONLY_KEYS.includes(k)) out[k] = v;
+    }
+    return out;
+  }
+
+  function recordFromReport(row) {
+    const type = profileTypeById(row.student_id);
+    const p = state.cloud.profiles.find((x) => x.id === row.student_id);
+    return {
+      ...(row.result || {}),
+      id: row.id,
+      studentId: row.student_id,
+      studentType: type,
+      studentName: p?.display_name || (row.result || {}).studentName || "",
+      dateIso: row.plan_date,
+      dbStatus: row.status,
+      submissionId: row.submission_id,
+      imagePath: row.image_path,
+      reportMode: row.report_mode,
+      engine: row.engine,
+      sentAt: row.sent_at,
+      createdAtEpochMs: (row.result || {}).createdAtEpochMs || Date.parse(row.created_at)
+    };
+  }
+
+  async function cloudLoadAll() {
+    const [profRes, setRes, repRes] = await Promise.all([
+      sb.from("profiles").select("*"),
+      sb.from("admin_settings").select("settings").eq("id", 1).maybeSingle(),
+      sb.from("reports").select("*").order("plan_date", { ascending: false }).order("created_at", { ascending: false }).limit(500)
+    ]);
+    if (profRes.error) throw profRes.error;
+    state.cloud.profiles = profRes.data || [];
+    state.cloud.studentProfiles = { HIGH_SCHOOL: null, ELEMENTARY: null };
+    for (const p of state.cloud.profiles) {
+      if (p.role === "student" && p.student_type && !state.cloud.studentProfiles[p.student_type]) {
+        state.cloud.studentProfiles[p.student_type] = p;
+      }
+    }
+    const hs = state.cloud.studentProfiles.HIGH_SCHOOL;
+    if (hs?.bible_member_name) state.settings.bibleMemberName = hs.bible_member_name;
+    if (hs?.bible_member_phone) state.settings.bibleMemberPhone = hs.bible_member_phone;
+    const remote = setRes.data?.settings || {};
+    if (Object.keys(remote).length) {
+      state.settings = { ...state.settings, ...remote };
+      localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(state.settings));
+    } else if (state.settings.geminiApiKey) {
+      saveSettings(); // 처음 로그인한 기기의 설정을 클라우드에 올림
+    }
+    if (repRes.error) throw repRes.error;
+    state.records = (repRes.data || []).map(recordFromReport);
+    await Promise.all([cloudLoadSubmissions(), cloudLoadMaterials()]);
+    cloudCleanupOldImages().catch(() => {});
+  }
+
+  async function cloudLoadSubmissions() {
+    const { data, error } = await sb.from("submissions")
+      .select("*").in("status", ["submitted", "analyzing", "analyzed", "failed"])
+      .order("created_at", { ascending: true });
+    if (error) { console.error("[cloud] submissions", error); return; }
+    state.cloud.submissions = data || [];
+    renderInbox();
+  }
+
+  async function cloudLoadMaterials() {
+    const { data, error } = await sb.from("material_progress").select("*").order("last_studied_on", { ascending: false, nullsFirst: false });
+    if (error) { console.error("[cloud] materials", error); return; }
+    state.cloud.materials = data || [];
+  }
+
+  async function cloudSaveRecord(rec) {
+    const prof = state.cloud.studentProfiles[rec.studentType];
+    if (!prof) throw new Error(`${rec.studentType === "ELEMENTARY" ? "초등학생" : "고등학생"} 계정이 없어 클라우드에 저장하지 못했습니다.`);
+    rec.studentId = prof.id;
+    if (rec.nanoBananaImageDataUrl && String(rec.nanoBananaImageDataUrl).startsWith("data:") && rec.reportMode !== "report" && !rec.imagePath) {
+      const path = `${prof.id}/${rec.id}.png`;
+      const up = await sb.storage.from(SB_CONF.imageBucket).upload(path, dataUrlToBlob(rec.nanoBananaImageDataUrl), { upsert: true, contentType: "image/png" });
+      if (!up.error) rec.imagePath = path;
+    }
+    const row = {
+      id: rec.id,
+      student_id: prof.id,
+      plan_date: rec.dateIso,
+      submission_id: rec.submissionId || null,
+      engine: rec.engine || "gemini",
+      report_mode: rec.reportMode === "report" ? "report" : "image",
+      result: resultFromRecord(rec),
+      image_path: rec.imagePath || null
+    };
+    const { error } = await sb.from("reports").upsert(row, { onConflict: "id" });
+    if (error) throw error;
+  }
+
+  async function cloudSendRecord(rec) {
+    await cloudSaveRecord(rec);
+    const { error } = await sb.from("reports").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", rec.id);
+    if (error) throw error;
+    rec.dbStatus = "sent";
+    if (rec.submissionId) {
+      const sub = await sb.from("submissions").select("photo_path").eq("id", rec.submissionId).maybeSingle();
+      const path = sub.data?.photo_path;
+      if (path) await sb.storage.from(SB_CONF.photoBucket).remove([path]);
+      await sb.from("submissions").update({ status: "sent", photo_path: null }).eq("id", rec.submissionId);
+    }
+    await Promise.all([cloudLoadSubmissions(), cloudLoadMaterials()]);
+  }
+
+  async function cloudDeleteRecord(id) {
+    const rec = state.records.find((r) => r.id === id);
+    const { data } = await sb.from("reports").select("image_path").eq("id", id).maybeSingle();
+    const { error } = await sb.from("reports").delete().eq("id", id);
+    if (error) throw error;
+    const path = data?.image_path || rec?.imagePath;
+    if (path) await sb.storage.from(SB_CONF.imageBucket).remove([path]);
+    await cloudLoadMaterials();
+  }
+
+  // 보낸 지 7일 지난 첨삭 그림은 저장공간에서 지움 (리포트 데이터는 그대로)
+  async function cloudCleanupOldImages() {
+    const cutoff = new Date(Date.now() - 7 * 86400000).toISOString();
+    const { data } = await sb.from("reports").select("id, image_path")
+      .eq("status", "sent").lt("sent_at", cutoff).not("image_path", "is", null).limit(100);
+    if (!data || !data.length) return;
+    await sb.storage.from(SB_CONF.imageBucket).remove(data.map((r) => r.image_path));
+    await sb.from("reports").update({ image_path: null }).in("id", data.map((r) => r.id));
+  }
+
+  function escHtml(v) {
+    return String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function renderInbox() {
+    const box = $("inboxList");
+    if (!box) return;
+    const subs = state.cloud.submissions || [];
+    $("inboxCountText").textContent = String(subs.filter((s) => s.status === "submitted").length);
+    if (!subs.length) {
+      box.innerHTML = `<p style="font-size:13px; color:#64748B; margin:6px 0 0;">새로 받은 플래너가 없습니다.</p>`;
+      return;
+    }
+    const label = { submitted: "새 제출", analyzing: "분석 중", analyzed: "분석 완료 · 미발송", failed: "실패" };
+    box.innerHTML = subs.map((s) => {
+      const p = state.cloud.profiles.find((x) => x.id === s.student_id);
+      const emoji = p?.student_type === "ELEMENTARY" ? "🌱" : "🎓";
+      return `
+        <div class="record-item" data-sub-id="${escHtml(s.id)}">
+          <div class="score-box" style="font-size:12px;">${escHtml(label[s.status] || s.status)}</div>
+          <div class="record-meta">
+            <div class="record-title">${emoji} ${escHtml(p?.display_name || "학생")} · ${escHtml(s.plan_date)} 플래너</div>
+            <div class="record-sub">${escHtml(s.student_memo || "")}</div>
+          </div>
+          <button class="btn btn-ghost" data-sub-del="${escHtml(s.id)}" title="삭제">🗑️</button>
+        </div>`;
+    }).join("");
+    box.querySelectorAll("[data-sub-id]").forEach((el) => el.addEventListener("click", (e) => {
+      const sub = state.cloud.submissions.find((x) => x.id === el.dataset.subId);
+      if (!sub) return;
+      if (e.target?.dataset?.subDel) { e.stopPropagation(); deleteSubmission(sub); return; }
+      openSubmission(sub);
+    }));
+  }
+
+  async function openSubmission(sub) {
+    const existing = state.records.find((r) => r.submissionId === sub.id);
+    const type = profileTypeById(sub.student_id);
+    if (state.activeStudent !== type) {
+      state.activeStudent = type;
+      document.querySelectorAll(".student-tab").forEach((t) => t.classList.toggle("active", t.dataset.student === type));
+      refreshAllViews();
+    }
+    if (existing && sub.status === "analyzed") {
+      await openDailyResult(existing);
+      switchTab("inspect");
+      showToast("분석해 둔 리포트입니다. 확인 후 [학생에게 보내기]를 눌러 주세요.");
+      return;
+    }
+    if (!sub.photo_path) { showToast("사진이 없습니다."); return; }
+    showToast("학생 사진을 불러오는 중...");
+    const signed = await sb.storage.from(SB_CONF.photoBucket).createSignedUrl(sub.photo_path, 600);
+    if (signed.error) { showToast(`사진을 불러오지 못했습니다: ${signed.error.message}`); return; }
+    try {
+      state.uploadedImageDataUrl = await urlToDataUrl(signed.data.signedUrl);
+    } catch (e) {
+      showToast(`사진을 불러오지 못했습니다: ${e.message}`);
+      return;
+    }
+    state.cloud.currentSubmission = sub;
+    $("uploadedPhotoImg").src = state.uploadedImageDataUrl;
+    $("photoPreviewBox").style.display = "block";
+    $("inputInspectDate").value = sub.plan_date;
+    $("inputTeacherMemo").value = sub.student_memo ? `학생 메모: ${sub.student_memo}` : "";
+    $("dailyResultSection").style.display = "none";
+    switchTab("inspect");
+    showToast("학생 플래너를 불러왔습니다. [AI 플래너 분석]을 눌러 주세요.");
+  }
+
+  async function deleteSubmission(sub) {
+    if (!confirm("이 제출을 삭제할까요? 사진도 함께 지워집니다.")) return;
+    if (sub.photo_path) await sb.storage.from(SB_CONF.photoBucket).remove([sub.photo_path]);
+    const { error } = await sb.from("submissions").delete().eq("id", sub.id);
+    if (error) { showToast(`삭제 실패: ${error.message}`); return; }
+    await cloudLoadSubmissions();
+    showToast("제출을 삭제했습니다.");
+  }
+
+  function renderMaterials() {
+    const box = $("materialsList");
+    if (!box) return;
+    const sid = state.cloud.studentProfiles[state.activeStudent]?.id;
+    const ms = (state.cloud.materials || []).filter((m) => m.student_id === sid);
+    if (!ms.length) {
+      box.innerHTML = `<p style="font-size:13px; color:#64748B; margin:6px 0 0;">리포트를 학생에게 보내면 플래너에 적힌 교재가 자동으로 등록됩니다.</p>`;
+      return;
+    }
+    box.innerHTML = ms.map((m) => `
+      <div class="record-item" style="display:block; cursor:default;">
+        <div class="record-title">${escHtml(m.subject_name || "과목")} · ${escHtml(m.title)} ${m.progress_pct != null ? `<span class="pill pill-emerald">${m.progress_pct}%</span>` : ""}</div>
+        <div class="record-sub" style="white-space:normal;">
+          ${m.current_position != null ? `${m.current_position}${escHtml(m.unit_type)}까지` : "완료 기록 없음"} · 누적 ${m.units_done}${escHtml(m.unit_type)}
+          ${Number(m.pace_per_day_14d) > 0 ? ` · 최근 하루 ${m.pace_per_day_14d}${escHtml(m.unit_type)}` : ""}
+          ${m.predicted_finish ? ` · 예상 완료 ${m.predicted_finish}` : ""}
+        </div>
+        <div class="btn-row" style="margin-top:6px;">
+          <input type="number" min="1" placeholder="전체 ${escHtml(m.unit_type)} 수" value="${m.total_units ?? ""}" data-mat-total="${m.id}" style="padding:7px 10px; border-radius:10px; border:1.5px solid var(--border);" />
+          <input type="date" value="${m.target_date ?? ""}" data-mat-target="${m.id}" style="padding:7px 10px; border-radius:10px; border:1.5px solid var(--border);" />
+        </div>
+        <button class="btn btn-outline btn-full" data-mat-save="${m.id}" style="margin-top:6px; padding:7px;">저장 (전체 분량 · 목표 완료일)</button>
+      </div>`).join("");
+    box.querySelectorAll("[data-mat-save]").forEach((b) => b.addEventListener("click", async () => {
+      const id = b.dataset.matSave;
+      const total = box.querySelector(`[data-mat-total="${id}"]`).value;
+      const target = box.querySelector(`[data-mat-target="${id}"]`).value;
+      const { error } = await sb.from("materials").update({
+        total_units: total ? Number(total) : null,
+        target_date: target || null,
+        auto_created: false
+      }).eq("id", id);
+      if (error) { showToast(`저장 실패: ${error.message}`); return; }
+      await cloudLoadMaterials();
+      renderMaterials();
+      showToast("교재 정보를 저장했습니다.");
+    }));
+  }
+
+  // ---- 분석 엔진 선택 (Gemini / 로컬 mlx-serve) ----
+  async function callMlxChat({ system, prompt, imageB64, schema }) {
+    const base = String(state.settings.mlxBaseUrl || "http://localhost:11234").replace(/\/+$/, "");
+    let res;
+    try {
+      res = await fetch(`${base}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: state.settings.mlxModel,
+          temperature: 0.4,
+          max_tokens: 8000,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: [
+              { type: "text", text: prompt },
+              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageB64}` } }
+            ] }
+          ],
+          response_format: { type: "json_schema", json_schema: { name: "planner_analysis", schema } }
+        })
+      });
+    } catch (e) {
+      throw new Error(`로컬 mlx-serve(${base})에 연결하지 못했습니다. 이 기기가 mlx-serve가 켜진 Mac인지 확인해 주세요. [원문] ${e.message}`);
+    }
+    const text = await res.text();
+    if (!res.ok) throw new Error(`mlx-serve 오류 (HTTP ${res.status}): ${text.slice(0, 300)}`);
+    const json = JSON.parse(text);
+    const content = json?.choices?.[0]?.message?.content;
+    const raw = Array.isArray(content) ? content.map((c) => c.text || "").join("") : String(content || "");
+    return parseJsonSafe(raw);
+  }
+
+  async function runAnalysisEngine({ system, prompt, imageB64, schema }) {
+    const engine = state.settings.analysisEngine || "gemini";
+    const gemini = () => callGeminiInteraction({
+      model: state.settings.geminiModel || "gemini-4-hydrogen",
+      system_instruction: system,
+      store: false,
+      input: [
+        { type: "text", text: prompt },
+        { type: "image", data: imageB64, mime_type: "image/jpeg" }
+      ],
+      response_format: { type: "text", mime_type: "application/json", schema }
+    });
+    if (engine === "gemini") { state.lastEngineUsed = "gemini"; return gemini(); }
+    try {
+      const out = await callMlxChat({ system, prompt, imageB64, schema });
+      state.lastEngineUsed = "mlx";
+      return out;
+    } catch (e) {
+      if (engine === "mlx_then_gemini" && state.settings.geminiApiKey.trim()) {
+        console.warn("[engine] mlx 실패 → Gemini", e);
+        showToast("로컬 분석이 안 돼서 Gemini로 분석합니다.");
+        state.lastEngineUsed = "gemini";
+        return gemini();
+      }
+      throw e;
+    }
+  }
+
+  async function testMlxConnection() {
+    const base = String($("settingMlxUrl").value || "http://localhost:11234").replace(/\/+$/, "");
+    const box = $("mlxTestResult");
+    box.textContent = "연결 확인 중...";
+    try {
+      const r = await fetch(`${base}/v1/models`);
+      const j = await r.json();
+      const ids = (j.data || []).map((m) => m.id);
+      box.textContent = `✅ 연결됨 · 모델 ${ids.length}개: ${ids.join(", ")}`;
+    } catch (e) {
+      box.textContent = `❌ 연결 실패: ${e.message}. 이 기기가 mlx-serve가 켜진 Mac이어야 하고, 브라우저가 로컬 네트워크 접근을 물으면 허용해 주세요.`;
+    }
+  }
+
+  // ---- 로그인 ----
+  function showAuthOverlay(msg = "") {
+    $("authOverlay").style.display = "flex";
+    $("authMsg").textContent = msg;
+  }
+
+  async function cloudLogin() {
+    const email = $("authEmail").value.trim();
+    const password = $("authPassword").value;
+    if (!email || !password) { $("authMsg").textContent = "이메일과 비밀번호를 입력해 주세요."; return; }
+    $("btnAuthLogin").disabled = true;
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    $("btnAuthLogin").disabled = false;
+    if (error) { $("authMsg").textContent = "이메일 또는 비밀번호가 맞지 않습니다."; return; }
+    $("authPassword").value = "";
+    await cloudAfterLogin();
+  }
+
+  async function cloudAfterLogin() {
+    const { data: { user } } = await sb.auth.getUser();
+    if (!user) { showAuthOverlay(); return; }
+    const { data: prof } = await sb.from("profiles").select("*").eq("id", user.id).maybeSingle();
+    if (!prof || prof.role !== "admin") {
+      await sb.auth.signOut();
+      showAuthOverlay("관리자 계정이 아닙니다. 학생은 학생용 앱(student.html)을 사용해 주세요.");
+      return;
+    }
+    state.cloud.user = user;
+    state.cloud.profile = prof;
+    $("authOverlay").style.display = "none";
+    if ($("cloudAccountText")) $("cloudAccountText").textContent = `${user.email} (관리자)`;
+    try {
+      await cloudLoadAll();
+    } catch (e) {
+      showToast(`클라우드 데이터를 불러오지 못했습니다: ${e.message}`);
+    }
+    populateSettingsInputs();
+    refreshAllViews();
+    fetchBible71LogsFromDb(false);
+  }
+
+  async function cloudBoot() {
+    $("btnAuthLogin").addEventListener("click", cloudLogin);
+    $("authPassword").addEventListener("keydown", (e) => { if (e.key === "Enter") cloudLogin(); });
+    $("btnCloudLogout").addEventListener("click", async () => {
+      await sb.auth.signOut();
+      state.records = [];
+      refreshAllViews();
+      showAuthOverlay("로그아웃했습니다.");
+    });
+    $("btnRefreshInbox").addEventListener("click", async () => {
+      await cloudLoadSubmissions();
+      showToast("받은 플래너를 새로 불러왔습니다.");
+    });
+    $("btnSendToStudent").addEventListener("click", async () => {
+      const rec = state.currentDailyResult;
+      if (!rec) return;
+      if (!confirm(`${rec.studentName || "학생"}에게 ${rec.dateIso} 리포트를 보낼까요? 보내면 원본 플래너 사진은 삭제됩니다.`)) return;
+      const btn = $("btnSendToStudent");
+      btn.disabled = true;
+      try {
+        await cloudSendRecord(rec);
+        showToast("학생에게 보냈습니다. 원본 사진은 삭제했고 교재 진도가 업데이트됐습니다.");
+        await openDailyResult(rec);
+        refreshAllViews();
+      } catch (e) {
+        showToast(`보내지 못했습니다: ${e.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    $("btnTestMlx").addEventListener("click", testMlxConnection);
+    const { data: { session } } = await sb.auth.getSession();
+    if (session) await cloudAfterLogin(); else showAuthOverlay();
+  }
+
   function init() {
     loadPersisted();
     const keyFromHash = applyKeyFromUrlHash();
     bindEvents();
     refreshAllViews();
     fetchBible71LogsFromDb(false);
-    if (keyFromHash) {
+    if (CLOUD) {
+      cloudBoot();
+    } else if (keyFromHash) {
       showToast("URL에서 Gemini API 키를 안전하게 저장했습니다!");
     } else if (state.purgedOnStartup) {
       showToast("요청에 따라 기존 분석 기록을 모두 삭제했습니다. 새로 검사를 시작하세요!");
     }
   }
 
-  window.addEventListener("DOMContentLoaded", init);
+  // 학생용 앱에서 같은 리포트 그림을 쓰도록 공개
+  window.PlannerCore = { renderDailyReportCanvas, PROFILES, colorForSubject };
+
+  if (IS_ADMIN_PAGE) window.addEventListener("DOMContentLoaded", init);
 })();

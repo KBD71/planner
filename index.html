@@ -9,6 +9,23 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div id="authOverlay" style="display:none; position:fixed; inset:0; z-index:80; background:rgba(15,23,42,.6); align-items:center; justify-content:center; padding:16px;">
+    <div class="card" style="width:100%; max-width:400px;">
+      <h2 class="card-title" style="margin-bottom:12px;">🔐 관리자 로그인</h2>
+      <div class="field">
+        <label for="authEmail">이메일</label>
+        <input type="email" id="authEmail" autocomplete="username" placeholder="관리자 이메일" />
+      </div>
+      <div class="field">
+        <label for="authPassword">비밀번호</label>
+        <input type="password" id="authPassword" autocomplete="current-password" />
+      </div>
+      <button class="btn btn-primary btn-full" id="btnAuthLogin">로그인</button>
+      <p id="authMsg" style="font-size:13px; color:#b91c1c; margin:8px 0 0;"></p>
+      <p style="font-size:12px; color:#64748b; margin:8px 0 0;">학생은 <a href="student.html">학생용 앱</a>을 사용하세요.</p>
+    </div>
+  </div>
+
   <header class="app-header">
     <div class="header-inner">
       <div class="header-top">
@@ -35,6 +52,14 @@
   <main class="container">
     <!-- 1. 홈 대시보드 -->
     <section class="tab-panel active" id="panel-home">
+      <div class="card" id="inboxCard">
+        <div class="card-title-row">
+          <h2 class="card-title">📥 학생이 보낸 플래너 (새 <span id="inboxCountText">0</span>건)</h2>
+          <button class="btn btn-ghost" id="btnRefreshInbox">🔄 새로고침</button>
+        </div>
+        <div id="inboxList"><p style="font-size:13px; color:#64748B; margin:6px 0 0;">로그인하면 학생이 보낸 플래너가 여기에 표시됩니다.</p></div>
+      </div>
+
       <div class="card">
         <div class="card-title-row">
           <h2 class="card-title" id="homeWeekTitle">이번 주 누적 현황</h2>
@@ -164,6 +189,7 @@
           <div class="card-title-row">
             <h2 class="card-title">전송 · PDF 저장 · 프린터 인쇄 · 드라이브</h2>
           </div>
+          <button class="btn btn-emerald btn-full" id="btnSendToStudent" style="display:none; margin-bottom:8px;">📤 학생에게 보내기</button>
           <div class="btn-row-4">
             <button class="btn btn-kakao" id="btnDailyKakao">💬 카톡 전송</button>
             <button class="btn btn-outline" id="btnDailyPdf">📄 PDF 저장</button>
@@ -241,6 +267,14 @@
 
       <div class="card">
         <div class="card-title-row">
+          <h2 class="card-title">📚 교재별 진도 (플래너에서 자동 기록)</h2>
+        </div>
+        <p style="font-size:12.5px; color:var(--text-sub); margin:0 0 6px;">교재의 전체 분량과 목표 완료일을 넣으면 진도율과 예상 완료일이 계산됩니다.</p>
+        <div id="materialsList"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title-row">
           <h2 class="card-title">주간 인포그래픽 리포트 미리보기</h2>
           <span class="pill pill-emerald" id="weeklyStagePill">Lv.1 씨앗기</span>
         </div>
@@ -253,6 +287,14 @@
     <!-- 4. 설정 · API 키 · 구글 드라이브 연동 -->
     <section class="tab-panel" id="panel-settings">
       <div class="card">
+        <div class="card-title-row">
+          <h2 class="card-title">👤 로그인 계정</h2>
+          <button class="btn btn-ghost" id="btnCloudLogout">로그아웃</button>
+        </div>
+        <p id="cloudAccountText" style="font-size:13px; color:var(--text-sub); margin:0;">로그인 전</p>
+        <p style="font-size:12px; color:var(--text-sub); margin:6px 0 0;">설정은 관리자 계정에 저장되어 모든 기기에서 같이 쓰입니다. 학생용 앱 주소: <a href="student.html">student.html</a></p>
+      </div>
+      <div class="card">
         <h2 class="card-title" style="margin-bottom: 12px;">1. Gemini API 키 & 나노 바나나 기본형 이미지 설정</h2>
         <div class="field">
           <label for="settingApiKey">보유하신 Gemini API Key (브라우저/기기 내부에만 안전 저장)</label>
@@ -264,6 +306,33 @@
             <option value="gemini-4-hydrogen">gemini-4-hydrogen (기본 · 빠르고 정확한 멀티모달)</option>
             <option value="gemini-4-argon">gemini-4-argon (고난도 추론 · 정밀 코칭)</option>
             <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (초고속 · 최저비용)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="settingEngine">🧠 분석 엔진</label>
+          <select id="settingEngine">
+            <option value="gemini">Gemini (클라우드 · 어느 기기에서나)</option>
+            <option value="mlx">mlx-serve (내 Mac 로컬 · 무료)</option>
+            <option value="mlx_then_gemini">mlx-serve 먼저, 안 되면 Gemini</option>
+          </select>
+        </div>
+        <div class="btn-row">
+          <div class="field" style="margin-bottom:0;">
+            <label for="settingMlxUrl">mlx-serve 주소</label>
+            <input type="text" id="settingMlxUrl" placeholder="http://localhost:11234" />
+          </div>
+          <div class="field" style="margin-bottom:0;">
+            <label for="settingMlxModel">mlx 모델</label>
+            <input type="text" id="settingMlxModel" placeholder="mlx-community/gemma-4-26b-a4b-it-8bit" />
+          </div>
+        </div>
+        <button class="btn btn-outline btn-full" id="btnTestMlx" style="margin-top:8px;">🔌 mlx-serve 연결 테스트 (Mac에서)</button>
+        <p id="mlxTestResult" style="font-size:12.5px; color:var(--text-sub); margin:6px 0 10px;"></p>
+        <div class="field">
+          <label for="settingReportMode">🖼️ 리포트 형태</label>
+          <select id="settingReportMode">
+            <option value="image">그림 포함 (AI 첨삭 그림 + 리포트 카드)</option>
+            <option value="report">보고서만 (리포트 카드)</option>
           </select>
         </div>
         <div class="toggle-row">
@@ -385,6 +454,8 @@
     <img id="printSheetImg" alt="A4 인쇄용 리포트" />
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="supabase-config.js"></script>
   <script src="mccheyne-map.js"></script>
   <script src="app.js"></script>
 </body>
