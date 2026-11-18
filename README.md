@@ -87,3 +87,22 @@ python3 -m http.server 8080
 
 - **A4 규격 최적화**: 리포트가 길어도 내용이 잘리지 않고 자동으로 A4 페이지에 맞춰 분할·배치됩니다.
 - **손글씨 필사 가이드라인 옵션**: 설정에서 `PDF/인쇄용 손글씨 베껴쓰기 줄 포함`을 켜 두면, 출력된 종이 하단에 학생이 볼펜으로 직접 베껴쓸 수 있는 점선 칸이 함께 인쇄됩니다.
+
+---
+
+## ☁️ 클라우드 버전 (Supabase · 2026-11)
+
+모든 기록은 Supabase(`mathtox` 조직 / `planner` 프로젝트, 서울)에 저장되어 휴대폰·Mac 등 모든 기기에서 동기화됩니다.
+
+| 화면 | 주소 | 로그인 |
+|---|---|---|
+| 관리자 앱 | `https://kbd71.github.io/planner/` (index.html) | 관리자 이메일 |
+| 학생용 앱 | `https://kbd71.github.io/planner/student.html` | 아이디(예: hg5) + 비밀번호 |
+
+**흐름**: 학생이 플래너 촬영·제출 → 관리자 앱 📥 받은 플래너에서 열기 → AI 분석(엔진 선택) → 확인·수정 → 📤 학생에게 보내기 → 원본 사진 자동 삭제, 교재·진도·습관 자동 누적 → 학생 앱에서 리포트·진도 확인.
+
+- **분석 엔진**: 설정에서 Gemini / mlx-serve(Mac 로컬) / mlx-serve 먼저 후 Gemini 중 선택
+- **리포트 형태**: 그림 포함(AI 첨삭 그림) / 보고서만. 첨삭 그림은 보낸 뒤 7일이 지나면 저장공간에서 자동 삭제(리포트 데이터는 유지)
+- **진도 관리**: 플래너의 교재·쪽수를 AI가 숫자로 읽어 `materials`, `study_tasks`에 자동 기록. 주간리포트 탭에서 교재별 전체 분량·목표일을 넣으면 진도율·예상 완료일 계산
+- **DB 설계**: `supabase/001_schema.sql`, `supabase/002_study_tracking.sql`
+- **학생 계정 추가**: Supabase 대시보드 → Authentication → Add user (`아이디@planner.local`, Auto confirm) 후 SQL로 `profiles.student_type`, `display_name` 지정
