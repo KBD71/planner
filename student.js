@@ -260,7 +260,9 @@
     if (!data || !data.length) { box.innerHTML = `<p class="muted">리포트가 쌓이면 교재별 진도가 자동으로 기록돼요.</p>`; return; }
     box.innerHTML = data.map((m) => {
       const pct = m.progress_pct != null ? Number(m.progress_pct) : null;
-      const pos = m.current_position != null ? `${Number(m.current_position)}${esc(m.unit_type)}까지` : "아직 완료 기록 없음";
+      const pos = m.current_position != null
+        ? `${Number(m.current_position)}${esc(m.unit_type)}까지 · 누적 ${Number(m.units_done)}${esc(m.unit_type)}`
+        : (Number(m.units_done) > 0 ? `누적 ${Number(m.units_done)}${esc(m.unit_type)}` : "아직 완료 기록 없음");
       const total = m.total_units ? ` / 전체 ${Number(m.total_units)}${esc(m.unit_type)}` : "";
       const pace = Number(m.pace_per_day_14d) > 0 ? ` · 최근 하루 ${Number(m.pace_per_day_14d)}${esc(m.unit_type)}` : "";
       const finish = m.predicted_finish ? ` · 예상 완료 ${esc(m.predicted_finish)}` : "";
