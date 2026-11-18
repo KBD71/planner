@@ -198,6 +198,17 @@
           </div>
         </div>
 
+        <div id="dateCheckBox" style="display:none; padding:10px 12px; border-radius:12px; background:#FFFBEB; border:1.5px solid #FCD34D; color:#92400E; font-size:13px;"></div>
+
+        <div class="card" id="taskReviewCard">
+          <div class="card-title-row">
+            <h2 class="card-title">📚 보내기 전 진도 기록 확인</h2>
+            <button class="btn btn-ghost" id="btnAddStudyTask">＋ 항목 추가</button>
+          </div>
+          <p style="font-size:12.5px; color:var(--text-sub); margin:0 0 8px;">AI가 플래너에서 읽은 교재·분량입니다. 틀린 곳을 고치면 자동 저장되고, [학생에게 보내기]를 누를 때 이 내용으로 진도가 쌓입니다. 범위(몇~몇)나 개수 중 하나만 쓰면 됩니다.</p>
+          <div id="taskReviewList"></div>
+        </div>
+
         <div class="card">
           <div class="card-title-row">
             <h2 class="card-title">✍️ 보내기 전 베껴쓰기(필사) · 수정 방향 손질</h2>
@@ -308,26 +319,6 @@
             <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (초고속 · 최저비용)</option>
           </select>
         </div>
-        <div class="field">
-          <label for="settingEngine">🧠 분석 엔진</label>
-          <select id="settingEngine">
-            <option value="gemini">Gemini (클라우드 · 어느 기기에서나)</option>
-            <option value="mlx">mlx-serve (내 Mac 로컬 · 무료)</option>
-            <option value="mlx_then_gemini">mlx-serve 먼저, 안 되면 Gemini</option>
-          </select>
-        </div>
-        <div class="btn-row">
-          <div class="field" style="margin-bottom:0;">
-            <label for="settingMlxUrl">mlx-serve 주소</label>
-            <input type="text" id="settingMlxUrl" placeholder="http://localhost:11234" />
-          </div>
-          <div class="field" style="margin-bottom:0;">
-            <label for="settingMlxModel">mlx 모델</label>
-            <input type="text" id="settingMlxModel" placeholder="mlx-community/gemma-4-26b-a4b-it-8bit" />
-          </div>
-        </div>
-        <button class="btn btn-outline btn-full" id="btnTestMlx" style="margin-top:8px;">🔌 mlx-serve 연결 테스트 (Mac에서)</button>
-        <p id="mlxTestResult" style="font-size:12.5px; color:var(--text-sub); margin:6px 0 10px;"></p>
         <div class="field">
           <label for="settingReportMode">🖼️ 리포트 형태</label>
           <select id="settingReportMode">

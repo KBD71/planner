@@ -84,9 +84,7 @@
       includeHandwritingPracticeInPdf: true,
       hsSchoolHours: "08:00-16:30",
       elSchoolHours: "09:00-13:30",
-      analysisEngine: "gemini",           // gemini | mlx | mlx_then_gemini
-      mlxBaseUrl: "http://localhost:11234",
-      mlxModel: "mlx-community/gemma-4-26b-a4b-it-8bit",
+      analysisEngine: "gemini",
       reportMode: "image"                 // image(그림 포함) | report(보고서만)
     },
     cloud: {
@@ -1637,7 +1635,7 @@
       showToast("먼저 플래너 사진을 촬영하거나 선택해 주세요.");
       return;
     }
-    if (state.settings.analysisEngine === "gemini" && !state.settings.geminiApiKey.trim()) {
+    if (!state.settings.geminiApiKey.trim()) {
       switchTab("settings");
       showToast("설정 탭에서 Gemini API 키를 입력해 주세요.");
       return;
@@ -1693,12 +1691,17 @@
         .filter((m) => m.student_id === state.cloud.studentProfiles[profile.id]?.id)
         .map((m) => `${m.subject_name || "과목"}: ${m.title} (${m.unit_type}${m.current_position != null ? `, ${m.current_position}${m.unit_type}까지 함` : ""})`);
       const trackingRule =
-        `\n[진도·습관 자동 기록] 플래너의 공부 항목마다 studyTasks에 한 줄씩 담으세요. ` +
-        `subject(과목), material(교재·인강 이름), unitType(쪽/강/문항/회/장/단원 중 하나), plannedStart/plannedEnd(계획 범위 숫자, 예: 쎈 p.30~35 → 30, 35), ` +
-        `doneStart/doneEnd(완료 표시(체크·동그라미·색칠·O)가 있는 범위만 숫자로, 일부만 했으면 한 데까지, 안 했거나 알 수 없으면 null), ` +
-        `plannedMinutes/actualMinutes(알 수 있으면), studyMode(SELF_STUDY/LECTURE/REVIEW), status(DONE/PARTIAL/NOT_DONE/UNKNOWN), rawText(플래너에 적힌 원문)를 채우세요. ` +
-        `교재 이름은 아래 [등록된 교재]에 같은 교재가 있으면 그 이름을 글자 그대로 쓰고, 처음 보는 교재일 때만 사진에 적힌 이름으로 새로 쓰세요. 숫자를 읽을 수 없으면 null로 두고 지어내지 마세요. ` +
-        `habitChecks에는 ${HABIT_KEYS.join(", ")} 각각에 대해 오늘 플래너가 그 습관을 지켰는지 passed(true/false)와 짧은 note를 담으세요(CLASS_SUMMARY는 평일에만). ` +
+        `\n[플래너 날짜] 플래너에 적힌 날짜를 plannerDate에 YYYY-MM-DD로 쓰세요(연도가 없으면 ${dateIso.slice(0, 4)}년). 날짜를 읽을 수 없으면 빈 문자열.` +
+        `\n[진도·습관 자동 기록] 플래너의 공부 항목마다 studyTasks에 한 줄씩 담으세요.` +
+        `\n- kind: 진도를 쌓을 교재·문제집·인강 강좌면 TEXTBOOK, 숙제·오답노트·단어 암기·지문 수 같은 일반 할 일이면 TASK.` +
+        `\n- material: TEXTBOOK이면 교재·강좌 이름(단원명·난이도는 빼고 교재 이름만, 예: "쎈", "한끝 문제집", "개념완성"). TASK면 할 일 이름.` +
+        `\n- 분량은 두 방식 중 플래너에 적힌 방식만 채우세요. ① 범위(예: p.30~35, 3~4강): plannedStart/plannedEnd, 완료 표시(✓·O·동그라미·색칠)가 있으면 doneStart/doneEnd. ② 개수(예: 10문제, 단어 30개, 2지문): plannedAmount, 완료했으면 doneAmount(일부만 했으면 한 만큼, 알 수 없으면 null). 개수를 범위로 바꾸지 마세요.` +
+        `\n- unitType(쪽/강/문항/회/장/단원/개/지문), studyMode(SELF_STUDY/LECTURE/REVIEW), status(DONE ✓, PARTIAL △, NOT_DONE ✕/표시 없음+미완 메모, UNKNOWN), rawText(플래너 원문 그대로).` +
+        `\n- plannedMinutes/actualMinutes는 플래너에 그 항목의 시간이 적혀 있을 때만 쓰고, 없으면 null.` +
+        `\n- 교재 이름은 아래 [등록된 교재]에 같은 교재가 있으면 그 이름을 글자 그대로 쓰세요.` +
+        `\n[지어내기 금지] 플래너에 없는 쪽수·문항 번호·시간·교재명을 만들지 마세요. 다른 항목의 쪽수를 옮겨 쓰지 마세요. corrections의 afterText에서 분량을 제안할 때 실제 값을 모르면 "p.○~○", "○문항"처럼 빈칸 기호로 쓰세요. classSummaries의 betterExample은 형식 예시임이 드러나게 "(예시)"로 시작하세요.` +
+        `\n[시간 합계] selfStudyMinutes + lectureMinutes + reviewMinutes = totalStudyMinutes가 되게 하고, 플래너에 총 공부시간이 적혀 있으면 그 값을 totalStudyMinutes로 쓰세요.` +
+        `\nhabitChecks에는 ${HABIT_KEYS.join(", ")} 각각에 대해 passed(true/false)와 짧은 note를 담으세요(CLASS_SUMMARY는 평일에만).` +
         `\n[등록된 교재]\n${knownMaterials.length ? knownMaterials.join("\n") : "(아직 없음)"}`;
       const systemInstructionFull = systemInstruction + schoolRule + trackingRule;
 
@@ -1726,7 +1729,7 @@
           "totalStudyMinutes", "selfStudyMinutes", "lectureMinutes", "reviewMinutes",
           "plannedTasksCount", "completedTasksCount", "copywritingPromise", "copywritingPractice",
           "bibleReadingCompleted", "biblePassageText", "bibleChaptersCount",
-          "classSummaries", "studyTasks", "habitChecks"
+          "classSummaries", "studyTasks", "habitChecks", "plannerDate"
         ],
         properties: {
           habitScore: { type: "integer" },
@@ -1745,15 +1748,19 @@
           bibleReadingCompleted: { type: "boolean" },
           biblePassageText: { type: "string" },
           bibleChaptersCount: { type: "integer" },
+          plannerDate: { type: "string" },
           studyTasks: {
             type: "array",
             items: {
               type: "object",
-              required: ["subject", "material", "unitType", "plannedStart", "plannedEnd", "doneStart", "doneEnd", "plannedMinutes", "actualMinutes", "studyMode", "status", "rawText"],
+              required: ["kind", "subject", "material", "unitType", "plannedStart", "plannedEnd", "doneStart", "doneEnd", "plannedAmount", "doneAmount", "plannedMinutes", "actualMinutes", "studyMode", "status", "rawText"],
               properties: {
+                kind: { type: "string", enum: ["TEXTBOOK", "TASK"] },
                 subject: { type: "string" },
                 material: { type: "string" },
-                unitType: { type: "string", enum: ["쪽", "강", "문항", "회", "장", "단원"] },
+                unitType: { type: "string", enum: ["쪽", "강", "문항", "회", "장", "단원", "개", "지문"] },
+                plannedAmount: { type: ["number", "null"] },
+                doneAmount: { type: ["number", "null"] },
                 plannedStart: { type: ["number", "null"] },
                 plannedEnd: { type: ["number", "null"] },
                 doneStart: { type: ["number", "null"] },
@@ -1877,6 +1884,7 @@
         bibleNextSuggestion: biblePattern.nextDaySuggestion,
         nanoBananaImageDataUrl: nanoBananaDataUrl,
         studyTasks: Array.isArray(parsed.studyTasks) ? parsed.studyTasks : [],
+        plannerDate: /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.plannerDate || "")) ? parsed.plannerDate : "",
         habitChecks: Array.isArray(parsed.habitChecks) ? parsed.habitChecks : [],
         engine: state.lastEngineUsed || state.settings.analysisEngine,
         reportMode: state.settings.reportMode || "image",
@@ -2474,6 +2482,8 @@
       $("btnSendToStudent").textContent = record.dbStatus === "sent" ? "✅ 학생에게 보냄 (수정 내용 다시 보내기)" : "📤 학생에게 보내기";
     }
     if (record.reportMode === "report") record.nanoBananaImageDataUrl = null;
+    renderDateCheck(record);
+    renderTaskReview(record);
     if (record.nanoBananaImageDataUrl) {
       $("nanoBananaPreviewCard").style.display = "block";
       $("nanoBananaRenderedImg").src = record.nanoBananaImageDataUrl;
@@ -2708,9 +2718,6 @@
     $("settingWebhookUrl").value = state.settings.googleAppsScriptWebhookUrl || "";
     $("settingAutoSync").checked = Boolean(state.settings.autoSyncToDrive);
     $("settingPdfLines").checked = Boolean(state.settings.includeHandwritingPracticeInPdf);
-    $("settingEngine").value = state.settings.analysisEngine || "gemini";
-    $("settingMlxUrl").value = state.settings.mlxBaseUrl || "http://localhost:11234";
-    $("settingMlxModel").value = state.settings.mlxModel || "mlx-community/gemma-4-26b-a4b-it-8bit";
     $("settingReportMode").value = state.settings.reportMode || "image";
     $("settingHsSchoolHours").value = state.settings.hsSchoolHours || "08:00-16:30";
     $("settingElSchoolHours").value = state.settings.elSchoolHours || "09:00-13:30";
@@ -2726,7 +2733,7 @@
       "focusHabit", "googleAppsScriptWebhookUrl",
       "autoSyncToDrive", "includeHandwritingPracticeInPdf",
       "hsSchoolHours", "elSchoolHours",
-      "analysisEngine", "mlxBaseUrl", "mlxModel", "reportMode"
+      "reportMode"
     ];
     let changed = false;
     for (const k of allowedKeys) {
@@ -2780,6 +2787,17 @@
     $("inputCameraFile").addEventListener("change", (e) => handlePhotoInput(e.target.files[0]));
     $("inputGalleryFile").addEventListener("change", (e) => handlePhotoInput(e.target.files[0]));
     $("btnRunDailyAi").addEventListener("click", analyzeDailyPlannerPhoto);
+    $("btnAddStudyTask").addEventListener("click", () => {
+      const rec = state.currentDailyResult;
+      if (!rec) return;
+      (rec.studyTasks = rec.studyTasks || []).push({
+        kind: "TEXTBOOK", subject: "", material: "", unitType: "쪽",
+        plannedStart: null, plannedEnd: null, doneStart: null, doneEnd: null,
+        plannedAmount: null, doneAmount: null, plannedMinutes: null, actualMinutes: null,
+        studyMode: "SELF_STUDY", status: "UNKNOWN", rawText: "(관리자 추가)"
+      });
+      renderTaskReview(rec);
+    });
 
     $("btnApplyCopywritingEdit").addEventListener("click", () => {
       if (!state.currentDailyResult) return;
@@ -2876,9 +2894,7 @@
         includeHandwritingPracticeInPdf: $("settingPdfLines").checked,
         hsSchoolHours: $("settingHsSchoolHours").value.trim() || "08:00-16:30",
         elSchoolHours: $("settingElSchoolHours").value.trim() || "09:00-13:30",
-        analysisEngine: $("settingEngine").value || "gemini",
-        mlxBaseUrl: $("settingMlxUrl").value.trim() || "http://localhost:11234",
-        mlxModel: $("settingMlxModel").value.trim() || "mlx-community/gemma-4-26b-a4b-it-8bit",
+        analysisEngine: "gemini",
         reportMode: $("settingReportMode").value || "image"
       };
       state.settings.useNanoBanana = state.settings.reportMode !== "report" && $("settingUseNanoBanana").checked;
@@ -3011,6 +3027,90 @@
     }
   }
 
+  // ==================== 보내기 전 확인: 날짜 · 진도 기록 ====================
+
+  function persistRecordEdit(rec, msg) {
+    saveRecords();
+    if (CLOUD) {
+      clearTimeout(persistRecordEdit._t);
+      persistRecordEdit._t = setTimeout(() => {
+        cloudSaveRecord(rec).then(() => { if (msg) showToast(msg); }).catch((e) => showToast(`저장 실패: ${e.message}`));
+      }, 600);
+    } else if (msg) {
+      showToast(msg);
+    }
+  }
+
+  function renderDateCheck(rec) {
+    const box = $("dateCheckBox");
+    if (!box) return;
+    if (!rec.plannerDate || rec.plannerDate === rec.dateIso) {
+      box.style.display = "none";
+      box.innerHTML = "";
+      return;
+    }
+    box.style.display = "block";
+    box.innerHTML = `⚠️ 플래너에 적힌 날짜는 <strong>${escHtml(rec.plannerDate)}</strong>인데, 이 리포트는 <strong>${escHtml(rec.dateIso)}</strong>로 저장되어 있습니다.
+      <button class="btn btn-outline btn-full" id="btnUsePlannerDate" style="margin-top:8px; padding:7px;">플래너 날짜(${escHtml(rec.plannerDate)})로 바꾸기</button>`;
+    $("btnUsePlannerDate").addEventListener("click", async () => {
+      rec.dateIso = rec.plannerDate;
+      if (CLOUD && rec.submissionId) {
+        await sb.from("submissions").update({ plan_date: rec.dateIso }).eq("id", rec.submissionId);
+      }
+      persistRecordEdit(rec, `날짜를 ${rec.dateIso}로 바꿨습니다.`);
+      await openDailyResult(rec);
+      refreshAllViews();
+    });
+  }
+
+  const TASK_STATUS_LABEL = { DONE: "완료", PARTIAL: "일부", NOT_DONE: "안 함", UNKNOWN: "모름" };
+  const TASK_UNITS = ["쪽", "강", "문항", "회", "장", "단원", "개", "지문"];
+
+  function renderTaskReview(rec) {
+    const box = $("taskReviewList");
+    if (!box) return;
+    const tasks = Array.isArray(rec.studyTasks) ? rec.studyTasks : (rec.studyTasks = []);
+    const num = (v) => (v === null || v === undefined || v === "" ? "" : escHtml(v));
+    const inp = (i, f, v, ph, w = "64px") => `<input type="number" inputmode="decimal" data-ti="${i}" data-tf="${f}" value="${num(v)}" placeholder="${ph}" style="width:${w}; padding:6px 8px; border-radius:8px; border:1.5px solid var(--border);" />`;
+    const sel = (i, f, v, opts) => `<select data-ti="${i}" data-tf="${f}" style="padding:6px 6px; border-radius:8px; border:1.5px solid var(--border);">${opts.map(([val, lab]) => `<option value="${val}" ${val === v ? "selected" : ""}>${lab}</option>`).join("")}</select>`;
+    const txt = (i, f, v, ph, w) => `<input type="text" data-ti="${i}" data-tf="${f}" value="${escHtml(v || "")}" placeholder="${ph}" style="width:${w}; padding:6px 8px; border-radius:8px; border:1.5px solid var(--border);" />`;
+    box.innerHTML = tasks.length ? tasks.map((t, i) => `
+      <div style="border:1.5px solid var(--border); border-radius:12px; padding:8px 10px; margin-bottom:8px; ${t.kind === "TASK" ? "background:#f8fafc;" : ""}">
+        <div style="font-size:12px; color:var(--text-sub); margin-bottom:6px;">📝 ${escHtml(t.rawText || "")}</div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center;">
+          ${sel(i, "kind", t.kind === "TASK" ? "TASK" : "TEXTBOOK", [["TEXTBOOK", "📚 교재(진도)"], ["TASK", "✅ 할 일"]])}
+          ${txt(i, "subject", t.subject, "과목", "64px")}
+          ${txt(i, "material", t.material, "교재/할 일 이름", "140px")}
+          ${sel(i, "unitType", TASK_UNITS.includes(t.unitType) ? t.unitType : "쪽", TASK_UNITS.map((u) => [u, u]))}
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px; font-size:12.5px;">
+          계획 ${inp(i, "plannedStart", t.plannedStart, "부터")}~${inp(i, "plannedEnd", t.plannedEnd, "까지")} 또는 ${inp(i, "plannedAmount", t.plannedAmount, "개수")}
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:6px; font-size:12.5px;">
+          완료 ${inp(i, "doneStart", t.doneStart, "부터")}~${inp(i, "doneEnd", t.doneEnd, "까지")} 또는 ${inp(i, "doneAmount", t.doneAmount, "개수")}
+          ${sel(i, "status", t.status || "UNKNOWN", Object.entries(TASK_STATUS_LABEL))}
+          <button class="btn btn-ghost" data-tdel="${i}" style="padding:4px 8px;">삭제</button>
+        </div>
+      </div>`).join("") : `<p style="font-size:13px; color:#64748B; margin:4px 0;">읽어 낸 공부 항목이 없습니다. 필요하면 추가해 주세요.</p>`;
+
+    box.querySelectorAll("[data-ti]").forEach((el) => el.addEventListener("change", () => {
+      const t = rec.studyTasks[Number(el.dataset.ti)];
+      const f = el.dataset.tf;
+      if (el.type === "number") {
+        t[f] = el.value === "" ? null : Number(el.value);
+      } else {
+        t[f] = el.value;
+      }
+      persistRecordEdit(rec);
+      if (f === "kind") renderTaskReview(rec);
+    }));
+    box.querySelectorAll("[data-tdel]").forEach((b) => b.addEventListener("click", () => {
+      rec.studyTasks.splice(Number(b.dataset.tdel), 1);
+      persistRecordEdit(rec, "항목을 삭제했습니다.");
+      renderTaskReview(rec);
+    }));
+  }
+
   // ==================== Supabase 클라우드 ====================
 
   function urlToDataUrl(url) {
@@ -3088,7 +3188,7 @@
     if (hs?.bible_member_phone) state.settings.bibleMemberPhone = hs.bible_member_phone;
     const remote = setRes.data?.settings || {};
     if (Object.keys(remote).length) {
-      state.settings = { ...state.settings, ...remote };
+      state.settings = { ...state.settings, ...remote, analysisEngine: "gemini" };
       localStorage.setItem(STORAGE_SETTINGS_KEY, JSON.stringify(state.settings));
     } else if (state.settings.geminiApiKey) {
       saveSettings(); // 처음 로그인한 기기의 설정을 클라우드에 올림
@@ -3262,7 +3362,7 @@
       <div class="record-item" style="display:block; cursor:default;">
         <div class="record-title">${escHtml(m.subject_name || "과목")} · ${escHtml(m.title)} ${m.progress_pct != null ? `<span class="pill pill-emerald">${m.progress_pct}%</span>` : ""}</div>
         <div class="record-sub" style="white-space:normal;">
-          ${m.current_position != null ? `${m.current_position}${escHtml(m.unit_type)}까지` : "완료 기록 없음"} · 누적 ${m.units_done}${escHtml(m.unit_type)}
+          ${m.current_position != null ? `${m.current_position}${escHtml(m.unit_type)}까지 · ` : ""}누적 ${m.units_done}${escHtml(m.unit_type)}
           ${Number(m.pace_per_day_14d) > 0 ? ` · 최근 하루 ${m.pace_per_day_14d}${escHtml(m.unit_type)}` : ""}
           ${m.predicted_finish ? ` · 예상 완료 ${m.predicted_finish}` : ""}
         </div>
@@ -3288,42 +3388,10 @@
     }));
   }
 
-  // ---- 분석 엔진 선택 (Gemini / 로컬 mlx-serve) ----
-  async function callMlxChat({ system, prompt, imageB64, schema }) {
-    const base = String(state.settings.mlxBaseUrl || "http://localhost:11234").replace(/\/+$/, "");
-    let res;
-    try {
-      res = await fetch(`${base}/v1/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: state.settings.mlxModel,
-          temperature: 0.4,
-          max_tokens: 8000,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: [
-              { type: "text", text: prompt },
-              { type: "image_url", image_url: { url: `data:image/jpeg;base64,${imageB64}` } }
-            ] }
-          ],
-          response_format: { type: "json_schema", json_schema: { name: "planner_analysis", schema } }
-        })
-      });
-    } catch (e) {
-      throw new Error(`로컬 mlx-serve(${base})에 연결하지 못했습니다. 이 기기가 mlx-serve가 켜진 Mac인지 확인해 주세요. [원문] ${e.message}`);
-    }
-    const text = await res.text();
-    if (!res.ok) throw new Error(`mlx-serve 오류 (HTTP ${res.status}): ${text.slice(0, 300)}`);
-    const json = JSON.parse(text);
-    const content = json?.choices?.[0]?.message?.content;
-    const raw = Array.isArray(content) ? content.map((c) => c.text || "").join("") : String(content || "");
-    return parseJsonSafe(raw);
-  }
-
+  // ---- 분석 엔진: Gemini 전용 ----
   async function runAnalysisEngine({ system, prompt, imageB64, schema }) {
-    const engine = state.settings.analysisEngine || "gemini";
-    const gemini = () => callGeminiInteraction({
+    state.lastEngineUsed = "gemini";
+    return callGeminiInteraction({
       model: state.settings.geminiModel || "gemini-4-hydrogen",
       system_instruction: system,
       store: false,
@@ -3333,34 +3401,6 @@
       ],
       response_format: { type: "text", mime_type: "application/json", schema }
     });
-    if (engine === "gemini") { state.lastEngineUsed = "gemini"; return gemini(); }
-    try {
-      const out = await callMlxChat({ system, prompt, imageB64, schema });
-      state.lastEngineUsed = "mlx";
-      return out;
-    } catch (e) {
-      if (engine === "mlx_then_gemini" && state.settings.geminiApiKey.trim()) {
-        console.warn("[engine] mlx 실패 → Gemini", e);
-        showToast("로컬 분석이 안 돼서 Gemini로 분석합니다.");
-        state.lastEngineUsed = "gemini";
-        return gemini();
-      }
-      throw e;
-    }
-  }
-
-  async function testMlxConnection() {
-    const base = String($("settingMlxUrl").value || "http://localhost:11234").replace(/\/+$/, "");
-    const box = $("mlxTestResult");
-    box.textContent = "연결 확인 중...";
-    try {
-      const r = await fetch(`${base}/v1/models`);
-      const j = await r.json();
-      const ids = (j.data || []).map((m) => m.id);
-      box.textContent = `✅ 연결됨 · 모델 ${ids.length}개: ${ids.join(", ")}`;
-    } catch (e) {
-      box.textContent = `❌ 연결 실패: ${e.message}. 이 기기가 mlx-serve가 켜진 Mac이어야 하고, 브라우저가 로컬 네트워크 접근을 물으면 허용해 주세요.`;
-    }
   }
 
   // ---- 로그인 ----
@@ -3434,7 +3474,6 @@
         btn.disabled = false;
       }
     });
-    $("btnTestMlx").addEventListener("click", testMlxConnection);
     const { data: { session } } = await sb.auth.getSession();
     if (session) await cloudAfterLogin(); else showAuthOverlay();
   }

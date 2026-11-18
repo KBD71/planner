@@ -101,8 +101,9 @@ python3 -m http.server 8080
 
 **흐름**: 학생이 플래너 촬영·제출 → 관리자 앱 📥 받은 플래너에서 열기 → AI 분석(엔진 선택) → 확인·수정 → 📤 학생에게 보내기 → 원본 사진 자동 삭제, 교재·진도·습관 자동 누적 → 학생 앱에서 리포트·진도 확인.
 
-- **분석 엔진**: 설정에서 Gemini / mlx-serve(Mac 로컬) / mlx-serve 먼저 후 Gemini 중 선택
+- **분석 엔진**: Gemini 전용 (mlx-serve 로컬 분석은 비교 시험 결과 숫자 해석 정확도가 낮아 제외)
+- **보내기 전 확인**: 플래너 날짜와 검사 날짜가 다르면 경고, AI가 읽은 교재·분량(범위 또는 개수)·완료 여부를 관리자가 고친 뒤 보내기
 - **리포트 형태**: 그림 포함(AI 첨삭 그림) / 보고서만. 첨삭 그림은 보낸 뒤 7일이 지나면 저장공간에서 자동 삭제(리포트 데이터는 유지)
 - **진도 관리**: 플래너의 교재·쪽수를 AI가 숫자로 읽어 `materials`, `study_tasks`에 자동 기록. 주간리포트 탭에서 교재별 전체 분량·목표일을 넣으면 진도율·예상 완료일 계산
-- **DB 설계**: `supabase/001_schema.sql`, `supabase/002_study_tracking.sql`
+- **DB 설계**: `supabase/001_schema.sql`, `002_study_tracking.sql`, `003_amounts_and_kinds.sql` (분량 개수, 교재/할 일 구분)
 - **학생 계정 추가**: Supabase 대시보드 → Authentication → Add user (`아이디@planner.local`, Auto confirm) 후 SQL로 `profiles.student_type`, `display_name` 지정
