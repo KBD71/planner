@@ -4,6 +4,8 @@
   const STORAGE_RECORDS_KEY = "planner_coach_records_v1";
   const STORAGE_SETTINGS_KEY = "planner_coach_settings_v1";
   const STORAGE_BIBLE71_CACHE_KEY = "planner_bible71_cache_v1";
+  // 2026-11-18 사용자 요청: 기존 분석 기록 1회 전체 삭제 (기기·브라우저별 최초 1회 실행)
+  const STORAGE_PURGE_FLAG_KEY = "planner_records_purged_20261118";
   const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1/interactions";
   const GEMINI_BETA_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/interactions";
   const NANO_BANANA_MODEL = "gemini-nano-banana-2.1";
@@ -71,7 +73,9 @@
       focusHabit: "BIBLE_AND_VOLUME",
       googleAppsScriptWebhookUrl: "",
       autoSyncToDrive: true,
-      includeHandwritingPracticeInPdf: true
+      includeHandwritingPracticeInPdf: true,
+      hsSchoolHours: "08:00-16:30",
+      elSchoolHours: "09:00-13:30"
     },
     uploadedImageDataUrl: null,
     currentDailyResult: null,
@@ -108,6 +112,16 @@
     } catch (_) {}
 
     try {
+      if (!localStorage.getItem(STORAGE_PURGE_FLAG_KEY)) {
+        const hadRecords = state.records.length > 0;
+        state.records = [];
+        localStorage.removeItem(STORAGE_RECORDS_KEY);
+        localStorage.setItem(STORAGE_PURGE_FLAG_KEY, new Date().toISOString());
+        state.purgedOnStartup = hadRecords;
+      }
+    } catch (_) {}
+
+    try {
       const rawBible = localStorage.getItem(STORAGE_BIBLE71_CACHE_KEY);
       if (rawBible) {
         const parsed = JSON.parse(rawBible);
@@ -140,12 +154,28 @@
       : (state.settings.elementaryName || "초등학생").trim();
   }
 
+  function isSchoolDay(dateIso) {
+    const d = new Date(`${dateIso}T12:00:00`);
+    const day = d.getDay();
+    return day >= 1 && day <= 5;
+  }
+
+  function schoolHoursText(profileId) {
+    const raw = profileId === "HIGH_SCHOOL" ? state.settings.hsSchoolHours : state.settings.elSchoolHours;
+    const fallback = profileId === "HIGH_SCHOOL" ? "08:00-16:30" : "09:00-13:30";
+    const m = String(raw || "").match(/(\d{1,2}):?(\d{2})?\s*[-~]\s*(\d{1,2}):?(\d{2})?/);
+    if (!m) return fallback.replace("-", "~");
+    const pad = (h, mm) => `${String(h).padStart(2, "0")}:${String(mm || "00").padStart(2, "0")}`;
+    return `${pad(m[1], m[2])}~${pad(m[3], m[4])}`;
+  }
+
   function colorForSubject(profileId, subject = "") {
     const s = String(subject);
     if (s.includes("성경") || s.includes("말씀") || s.includes("맥체인") || s.includes("QT") || s.includes("묵상") || s.includes("교리")) {
       return "#0D9488";
     }
     if (profileId === "HIGH_SCHOOL") {
+      if (s.includes("학교")) return "#94A3B8";
       if (s.includes("국어") || s.includes("문학") || s.includes("독서")) return "#3B82F6";
       if (s.includes("수학") || s.includes("미적") || s.includes("확통")) return "#EF4444";
       if (s.includes("영어")) return "#F59E0B";
@@ -624,6 +654,18 @@
     const bibleLines = wrapTextLines(mctx, bibleSummaryText, innerW - 36, '600 23px "Pretendard", sans-serif');
     const bibleCardH = 86 + bibleLines.length * 32;
 
+    const classItems = result.isSchoolDay ? (result.classSummaries || []) : [];
+    const classMetrics = classItems.map((c) => {
+      const readLines = wrapTextLines(mctx, `📝 ${c.summaryText || "(요약 없음)"}`, innerW - 44, '400 23px "Pretendard", sans-serif');
+      const fbLines = c.feedback ? wrapTextLines(mctx, `💬 ${c.feedback}`, innerW - 44, '600 23px "Pretendard", sans-serif') : [];
+      const exLines = (c.quality !== "GOOD" && c.betterExample) ? wrapTextLines(mctx, `✍️ 이렇게 써 보기: ${c.betterExample}`, innerW - 44, '700 23px "Pretendard", sans-serif') : [];
+      const boxH = 66 + (readLines.length + fbLines.length + exLines.length) * 31 + 14;
+      return { item: c, readLines, fbLines, exLines, boxH };
+    });
+    const classCardH = result.isSchoolDay
+      ? 96 + (classMetrics.length ? classMetrics.reduce((s2, m) => s2 + m.boxH + 12, 0) : 60) + 12
+      : 0;
+
     let nanoDrawH = 0;
     let nanoCardH = 0;
     if (nanoImageEl && nanoImageEl.width > 0 && nanoImageEl.height > 0) {
@@ -634,6 +676,7 @@
     const headerCardH = 266 + Math.max(40, praiseLines.length * 36) + summaryLines.length * 34;
     const totalH = Math.round(
       OUTER_PAD + headerCardH + 24 + bibleCardH + 24 +
+      (classCardH > 0 ? classCardH + 24 : 0) +
       (nanoCardH > 0 ? nanoCardH + 24 : 0) +
       correctionsCardH + 24 + timetableCardH + 24 + copyCardH + 68
     );
@@ -701,6 +744,40 @@
     drawWrappedLines(ctx, bibleLines, OUTER_PAD + INNER_PAD, y + 62, 32, '600 23px "Pretendard", sans-serif', "#0F172A");
 
     y += bibleCardH + 24;
+
+    // 1.6 School Class Summary Check Card (평일)
+    if (classCardH > 0) {
+      drawCard(ctx, OUTER_PAD, y, contentW, classCardH);
+      ctx.textBaseline = "top";
+      ctx.fillStyle = "#334155";
+      ctx.font = fontTitle;
+      ctx.fillText(`🏫 오늘 수업 내용 요약 점검 (학교 ${result.schoolHours || ""})`, OUTER_PAD + INNER_PAD, y + 28);
+      let ky = y + 82;
+      if (!classMetrics.length) {
+        ctx.fillStyle = "#B45309";
+        ctx.font = '600 24px "Pretendard", sans-serif';
+        ctx.fillText("플래너에서 수업 요약을 찾지 못했어요. 교시별로 [과목·단원·핵심 1줄]을 적어 보세요.", OUTER_PAD + INNER_PAD, ky);
+      }
+      const qStyle = {
+        GOOD: ["잘 정리함", "#DCFCE7", "#15803D"],
+        VAGUE: ["더 구체적으로", "#FEF3C7", "#B45309"],
+        MISSING: ["요약 없음", "#FEE2E2", "#DC2626"]
+      };
+      for (const m of classMetrics) {
+        const bx = OUTER_PAD + INNER_PAD;
+        const [qLabel, qBg, qFg] = qStyle[m.item.quality] || qStyle.VAGUE;
+        fillRoundRect(ctx, bx, ky, innerW, m.boxH, 16, "#F8FAFC");
+        fillRoundRect(ctx, bx, ky, 10, m.boxH, 5, qFg);
+        const sw = drawPillBadge(ctx, bx + 24, ky + 12, m.item.subject || "수업", "#E2E8F0", "#334155");
+        drawPillBadge(ctx, bx + 36 + sw, ky + 12, qLabel, qBg, qFg);
+        let ly = ky + 62;
+        ly += drawWrappedLines(ctx, m.readLines, bx + 24, ly, 31, '400 23px "Pretendard", sans-serif', "#334155");
+        ly += drawWrappedLines(ctx, m.fbLines, bx + 24, ly, 31, '600 23px "Pretendard", sans-serif', "#475569");
+        drawWrappedLines(ctx, m.exLines, bx + 24, ly, 31, '700 23px "Pretendard", sans-serif', "#1D4ED8");
+        ky += m.boxH + 12;
+      }
+      y += classCardH + 24;
+    }
 
     // 1.7 Nano Banana Basic Generated Annotated Planner Card (if available)
     if (nanoCardH > 0 && nanoImageEl) {
@@ -832,7 +909,7 @@
           }
 
           if (bw > 74) {
-            const prefix = block.studyMode === "LECTURE" ? "[인강] " : block.studyMode === "REVIEW" ? "★ " : "";
+            const prefix = String(block.subject || "").includes("학교") ? "🏫 " : block.studyMode === "LECTURE" ? "[인강] " : block.studyMode === "REVIEW" ? "★ " : "";
             ctx.fillStyle = block.studyMode === "LECTURE" ? "#0F172A" : "#FFFFFF";
             ctx.font = '700 19px "Pretendard", sans-serif';
             ctx.textBaseline = "middle";
@@ -1560,13 +1637,27 @@
         ? `당신은 고등학생(${name}) 전담 자기주도학습 및 경건 습관 플래너 코치입니다. 관리자가 종이 플래너를 검사하고 교정하는 단계입니다. 5대 원칙(교재/단원, 페이지/문항 분량, 목표시간 매칭, 순공/인강 균형, 오답복습)과 날짜별 성경읽기 패턴 분석을 기준으로 교정하세요. timeBlocks는 08~24시 10분 단위로 studyMode(SELF_STUDY, LECTURE, REVIEW)를 구별하며, 성경읽기 시간(subject: "성경", 20분)도 타임테이블에 배치하세요. copywritingPromise(40~65자)와 copywritingPractice(내일 첫 공부 & 다음 날 성경읽기 제안 예약 문장 포함, 35~65자)는 종이 플래너 여백에 손으로 베껴쓰기 좋게 작성하세요.`
         : `당신은 초등학생(${name}) 자기주도학습 및 성경읽기 습관 코치입니다. 초등학생은 bible71 앱 대신 종이 플래너에 직접 읽은 성경 분량을 기록합니다. 사진을 꼼꼼히 판독해 성경읽기(예: 잠언 1장, 마태복음 3장)가 적혀 있는지 확인하고, 날짜별 패턴을 바탕으로 내일 이어 읽을 성경 장수를 제안하세요. 일반 과목도 '[무엇을 + 몇 장/몇 쪽 + 몇 분]'으로 고쳐주고, timeBlocks는 14~21시 30분 블록으로 배치하세요. copywritingPractice는 내일 첫 공부·성경 약속 문장으로 만드세요.`;
 
+      const schoolDay = isSchoolDay(dateIso);
+      const schoolHours = schoolHoursText(profile.id);
+      const schoolRule = schoolDay
+        ? `\n[평일 학교 수업일] ${schoolHours}는 학교 수업 시간입니다. 이 시간에 개인 공부 계획이 없거나 비어 있어도 감점하거나 '공부 공백'으로 지적하지 마세요. ` +
+          `학생은 평일마다 플래너에 교시·과목별 '수업 내용 요약'을 쓰도록 지도받고 있습니다. 사진에서 수업 요약을 과목별로 판독해 classSummaries에 담으세요. ` +
+          `좋은 요약 기준: ①과목 ②단원/주제 ③핵심 개념·공식 1~2개를 자기 말로 ④이해 안 된 점/질문(있으면). ` +
+          `quality는 GOOD(기준 충족), VAGUE(과목·'수업 들음'처럼 막연함), MISSING(그 과목 요약 없음) 중 하나이며, VAGUE/MISSING이면 betterExample에 학생이 그대로 베껴 쓸 수 있는 1문장 예시(30~60자)를 쓰세요. ` +
+          `사진에서 과목명을 읽을 수 없으면 판독 가능한 범위만 쓰고 지어내지 마세요. ` +
+          `timeBlocks에는 학교 수업 시간을 subject "학교수업", studyMode "LECTURE", label "학교 수업" 블록 하나로 넣되, totalStudyMinutes·selfStudyMinutes·lectureMinutes·reviewMinutes와 계획 수(planned/completedTasksCount)는 학교 수업을 제외한 방과후 자기주도 학습만으로 계산하세요. ` +
+          `수업 요약이 부실하면 improvementSummary와 weakHabitTags(예: #수업요약)에 반영하고, 방과후 복습은 그날 수업 요약과 연결해 제안하세요.`
+        : `\n[주말/휴일] 학교 수업이 없는 날입니다. classSummaries는 빈 배열로 반환하세요.`;
+      const systemInstructionFull = systemInstruction + schoolRule;
+
       const bibleContextLine = profile.id === "HIGH_SCHOOL"
         ? `bible71 성경읽기(${dateIso}): ${bibleInfo.completed ? `완료 (${bibleInfo.passageText}, 총 ${bibleInfo.chaptersCount}장)` : "미기록"} | 날짜별 패턴: ${biblePattern.patternSummary} | 다음 날 제안: ${biblePattern.nextDaySuggestion}`
         : `초등 성경읽기 패턴: ${biblePattern.patternSummary} | 다음 날 제안: ${biblePattern.nextDaySuggestion} | 관리자 확인: ${$("inputElemBibleDone").checked ? `읽음 (${$("inputElemBiblePassage").value || "플래너 확인"})` : "사진에서 종이 플래너 성경읽기 분량을 직접 판독하세요"}`;
 
       const promptText = [
         `학생 구분: ${profile.emoji} ${profile.displayName} (이름: ${name})`,
-        `검사 날짜: ${dateIso}`,
+        `검사 날짜: ${dateIso} (${["일","월","화","수","목","금","토"][new Date(`${dateIso}T12:00:00`).getDay()]}요일)`,
+        schoolDay ? `학교 수업 시간(평일): ${schoolHours} — 수업 내용 요약 판독 필요` : "학교 수업 없음(주말)",
         `관리자 이번 주 집중 코칭 습관: ${focusHabitLabel}`,
         yesterdayPromise ? `어제 손글씨 약속: "${yesterdayPromise}" (관리자 이행 확인: ${keptYesterdayPromise ? "지킴" : "미확인/확인필요"})` : "",
         bibleContextLine,
@@ -1582,7 +1673,8 @@
           "weakHabitTags", "corrections", "timeBlocks",
           "totalStudyMinutes", "selfStudyMinutes", "lectureMinutes", "reviewMinutes",
           "plannedTasksCount", "completedTasksCount", "copywritingPromise", "copywritingPractice",
-          "bibleReadingCompleted", "biblePassageText", "bibleChaptersCount"
+          "bibleReadingCompleted", "biblePassageText", "bibleChaptersCount",
+          "classSummaries"
         ],
         properties: {
           habitScore: { type: "integer" },
@@ -1601,6 +1693,20 @@
           bibleReadingCompleted: { type: "boolean" },
           biblePassageText: { type: "string" },
           bibleChaptersCount: { type: "integer" },
+          classSummaries: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["subject", "summaryText", "quality", "feedback", "betterExample"],
+              properties: {
+                subject: { type: "string" },
+                summaryText: { type: "string" },
+                quality: { type: "string", enum: ["GOOD", "VAGUE", "MISSING"] },
+                feedback: { type: "string" },
+                betterExample: { type: "string" }
+              }
+            }
+          },
           corrections: {
             type: "array",
             items: {
@@ -1636,7 +1742,7 @@
 
       const parsed = await callGeminiInteraction({
         model: state.settings.geminiModel || "gemini-4-hydrogen",
-        system_instruction: systemInstruction,
+        system_instruction: systemInstructionFull,
         store: false,
         input: [
           { type: "text", text: promptText },
@@ -1693,6 +1799,9 @@
         biblePatternSummary: biblePattern.patternSummary,
         bibleNextSuggestion: biblePattern.nextDaySuggestion,
         nanoBananaImageDataUrl: nanoBananaDataUrl,
+        isSchoolDay: schoolDay,
+        schoolHours: schoolDay ? schoolHours : "",
+        classSummaries: schoolDay && Array.isArray(parsed.classSummaries) ? parsed.classSummaries : [],
         keptYesterdayPromise,
         focusHabitKey,
         syncedToDrive: false,
@@ -1904,6 +2013,13 @@
         `분석 단계: ${baseReport.stage.badgeText} (총 누적 ${baseReport.totalAccumulatedDays}일)`,
         `이번 주 공부시간: ${baseReport.totalStudyMinutes}분 (전주 대비: ${baseReport.prevWeekDeltaMinutes ?? "없음"}분)`,
         `순공 비율: ${baseReport.selfStudyRatioPercent}%, 계획 달성률: ${baseReport.completionRatePercent}%`,
+        (() => {
+          const sd = baseReport.thisWeekRecords.filter((r) => r.isSchoolDay);
+          if (!sd.length) return "평일 수업 요약: 기록 없음";
+          const all = sd.flatMap((r) => r.classSummaries || []);
+          const good = all.filter((c) => c.quality === "GOOD").length;
+          return `평일 수업 요약(학교 수업 시간은 공부시간 집계에서 제외됨): 평일 ${sd.length}일, 과목 요약 ${all.length}건 중 잘 정리 ${good}건 · 막연/누락 ${all.length - good}건`;
+        })(),
         `성경읽기 현황: ${baseReport.bibleSummaryLine}`,
         `과목 분포: ${baseReport.subjectBreakdowns.map((s) => `${s.subject} ${s.minutes}분`).join(", ")}`,
         `일별 상세:\n${baseReport.thisWeekRecords.map((r) => `- ${r.dateIso}: ${r.totalStudyMinutes}분, 점수 ${r.habitScore}, 성경읽기 ${r.bibleCompleted ? "완료" : "미완료"}, 달성 ${r.completedTasksCount}/${r.plannedTasksCount}, 태그 ${(r.weakHabitTags || []).join(",")}`).join("\n")}`,
@@ -1978,6 +2094,9 @@
       `• 플래너 점수: ${rec.habitScore}점 (${rec.gradeLabel})${rec.keptYesterdayPromise ? " 🎉 어제 약속 이행!" : ""}`,
       `• 총 공부시간: ${formatMinutes(rec.totalStudyMinutes)} (달성률 ${completionRate(rec)}%)`,
       `• ${bibleLine}`,
+      rec.isSchoolDay ? `• 🏫 수업 요약: ${(rec.classSummaries || []).length
+        ? rec.classSummaries.map((c) => `${c.subject}(${c.quality === "GOOD" ? "✅" : c.quality === "VAGUE" ? "△" : "✕"})`).join(" ")
+        : "플래너에 수업 요약 없음 — 교시별 [과목·단원·핵심 1줄] 쓰기"}` : "",
       `• 잘한 점: ${rec.praiseOneLiner}`,
       `• 수정 방향: ${rec.improvementSummary}`,
       rec.weakHabitTags?.length ? `• 보완 포인트: ${rec.weakHabitTags.join(" ")}` : "",
@@ -2456,6 +2575,8 @@
     $("settingWebhookUrl").value = state.settings.googleAppsScriptWebhookUrl || "";
     $("settingAutoSync").checked = Boolean(state.settings.autoSyncToDrive);
     $("settingPdfLines").checked = Boolean(state.settings.includeHandwritingPracticeInPdf);
+    $("settingHsSchoolHours").value = state.settings.hsSchoolHours || "08:00-16:30";
+    $("settingElSchoolHours").value = state.settings.elSchoolHours || "09:00-13:30";
   }
 
   function applyImportedSettingsObject(rawObj) {
@@ -2466,7 +2587,8 @@
       "highSchoolName", "elementaryName",
       "bibleMemberName", "bibleMemberPhone",
       "focusHabit", "googleAppsScriptWebhookUrl",
-      "autoSyncToDrive", "includeHandwritingPracticeInPdf"
+      "autoSyncToDrive", "includeHandwritingPracticeInPdf",
+      "hsSchoolHours", "elSchoolHours"
     ];
     let changed = false;
     for (const k of allowedKeys) {
@@ -2581,6 +2703,19 @@
     $("btnWeeklyPrint").addEventListener("click", () => printCanvas(state.currentWeeklyCanvas));
     $("btnWeeklyDrive").addEventListener("click", () => syncWeeklyToGoogleDrive(state.currentWeeklyReport, state.currentWeeklyCanvas));
 
+    $("btnDeleteAllRecords").addEventListener("click", () => {
+      const n = state.records.length;
+      if (!n) { showToast("삭제할 분석 기록이 없습니다."); return; }
+      if (!window.confirm(`이 기기에 저장된 분석 기록 ${n}건(두 학생 모두)을 모두 삭제할까요? 되돌릴 수 없습니다.`)) return;
+      state.records = [];
+      saveRecords();
+      state.currentDailyResult = null;
+      state.currentWeeklyReport = null;
+      $("dailyResultSection").style.display = "none";
+      refreshAllViews();
+      showToast(`분석 기록 ${n}건을 모두 삭제했습니다.`);
+    });
+
     $("btnSaveSettings").addEventListener("click", () => {
       state.settings = {
         geminiApiKey: $("settingApiKey").value.trim(),
@@ -2593,7 +2728,9 @@
         focusHabit: $("selectFocusHabit").value || "BIBLE_AND_VOLUME",
         googleAppsScriptWebhookUrl: $("settingWebhookUrl").value.trim(),
         autoSyncToDrive: $("settingAutoSync").checked,
-        includeHandwritingPracticeInPdf: $("settingPdfLines").checked
+        includeHandwritingPracticeInPdf: $("settingPdfLines").checked,
+        hsSchoolHours: $("settingHsSchoolHours").value.trim() || "08:00-16:30",
+        elSchoolHours: $("settingElSchoolHours").value.trim() || "09:00-13:30"
       };
       saveSettings();
       refreshAllViews();
@@ -2732,6 +2869,8 @@
     fetchBible71LogsFromDb(false);
     if (keyFromHash) {
       showToast("URL에서 Gemini API 키를 안전하게 저장했습니다!");
+    } else if (state.purgedOnStartup) {
+      showToast("요청에 따라 기존 분석 기록을 모두 삭제했습니다. 새로 검사를 시작하세요!");
     }
   }
 

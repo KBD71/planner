@@ -297,6 +297,19 @@
           </div>
           <input type="checkbox" id="settingPdfLines" checked style="width: 20px; height: 20px;" />
         </div>
+        <div class="btn-row" style="margin-top: 10px;">
+          <div class="field" style="margin-bottom: 0;">
+            <label for="settingHsSchoolHours">🏫 고등 평일 수업 시간</label>
+            <input type="text" id="settingHsSchoolHours" value="08:00-16:30" placeholder="08:00-16:30" />
+          </div>
+          <div class="field" style="margin-bottom: 0;">
+            <label for="settingElSchoolHours">🏫 초등 평일 수업 시간</label>
+            <input type="text" id="settingElSchoolHours" value="09:00-13:30" placeholder="09:00-13:30" />
+          </div>
+        </div>
+        <div style="font-size: 12px; color: var(--text-sub); margin-top: 6px;">
+          월~금에는 이 시간을 학교 수업으로 보고 감점하지 않으며, 플래너에 적은 교시·과목별 수업 내용 요약을 판독해 점검합니다. (공부시간 집계에서 수업 시간은 제외)
+        </div>
       </div>
 
       <div class="card">
@@ -345,6 +358,8 @@
           <button class="btn btn-outline" id="btnExportBackupJson">💾 전체 JSON 백업 저장</button>
           <button class="btn btn-outline" id="btnExportStudentCsv">📊 현재 학생 CSV 내보내기</button>
         </div>
+
+        <button class="btn btn-outline btn-full" id="btnDeleteAllRecords" style="margin-top: 8px; color: #DC2626; border-color: #FCA5A5;">🗑️ 이 기기의 분석 기록 전체 삭제</button>
 
         <div class="field" style="margin-top: 10px; margin-bottom: 0;">
           <label for="inputRestoreBackupFile">백업 JSON 파일 불러오기</label>
